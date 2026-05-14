@@ -11,6 +11,4 @@ This directory holds Architectural Decision Records (ADRs) — `NNNN-slug.md` fi
 
 ## Index
 
-| ID | Title | Status |
-|---|---|---|
-| D-0001 | Meta-project Linear setup | Active |
+_No ADRs yet. The first ADR for this fork will be allocated by `/review` (auto-ADR) or by the founder authoring `NNNN-<slug>.md` manually._
