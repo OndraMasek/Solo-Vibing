@@ -31,13 +31,38 @@ Each stage Task-invokes the next per its own Chains section; the founder fires `
 
 ## Using this template
 
-1. Click **Use this template → Create a new repository** on GitHub.
-2. Clone your new repo locally.
-3. Set up prereqs:
-   - Connect **Linear** (workspace-scoped) and **GitHub** (repo read) connectors in your Claude.ai project.
-   - Put your Linear personal API key in `.env` (reserved for v0.2 scripts).
-4. Run `/onboard` in Claude Code from the repo root. It will: detect brownfield vs greenfield, verify connectors, set your project marker, scaffold `CLAUDE.md`, and seed the first north-star question.
-5. From there the cascade takes over.
+### Quick start (recommended)
+
+In a fresh terminal, create an empty directory and run the bootstrap one-liner:
+
+```bash
+mkdir my-project && cd my-project
+curl -fsSL https://raw.githubusercontent.com/OndraMasek/Solo-Vibing/main/bootstrap.sh | bash
+```
+
+The script (see [`bootstrap.sh`](./bootstrap.sh)) downloads the latest template into the current directory and initializes a fresh git repo on `main`. From there:
+
+```bash
+claude         # launch Claude Code in this folder
+```
+
+And as the first command inside Claude Code:
+
+```
+/onboard
+```
+
+`/onboard` walks you through: picking your project marker, verifying Linear + GitHub connectors in your Claude.ai project, creating `.env` for your Linear API key, and seeding the first north-star question. After that the cascade takes over.
+
+Pushing to GitHub is optional and can wait — once you want a remote, run `gh repo create --source=. --push --private` (or use the GitHub web UI).
+
+### Alternative: GitHub "Use this template"
+
+If you'd rather start from GitHub's UI:
+
+1. Click **Use this template → Create a new repository** at the top of [this repo](https://github.com/OndraMasek/Solo-Vibing).
+2. `git clone` your new repo locally.
+3. Run `claude` in the repo root, then `/onboard`.
 
 ## Prereqs
 
