@@ -67,13 +67,29 @@ And as the first command inside Claude Code:
 
 Everything else is yes/no confirmation: connectors, GitHub remote, upstream-content audit, Linear team selection. At the end, /onboard renders `docs/onboarding/chat-kickoff.md` and `docs/onboarding/chat-instructions.md` — open your Claude.ai project, attach the instructions, paste the kickoff message, and /discovery runs there.
 
-### Alternative: GitHub "Use this template"
+### Alternative: GitHub "Use this template" (not recommended)
 
-If you'd rather start from GitHub's UI:
+GitHub's **Use this template → Create a new repository** button bypasses `bootstrap.sh`, which means your fork inherits the upstream's own canonical artifacts as if they were yours:
 
-1. Click **Use this template → Create a new repository** at the top of [this repo](https://github.com/OndraMasek/Solo-Vibing).
-2. `git clone` your new repo locally.
-3. Run `claude` in the repo root, then `/onboard`.
+- `CLAUDE.md` (carries Solo-Setup's marker and project identity)
+- `docs/.solo-config.json` (Solo-Setup's config)
+- `docs/constitution.md` (Solo-Setup's governing principles)
+- `docs/product/north-star.md` (Solo-Setup's north-star)
+- `docs/specs/0001-wrap-build-log/` (Solo-Setup's in-flight spec)
+
+Downstream skills (`/specify`, `/review`, `/verify`) will read these as the fork's own state and produce incoherent output. If you used this path anyway, recover by running:
+
+```bash
+bash bootstrap.sh --refresh-templates   # re-overlay clean templates
+# then delete the inherited upstream identity:
+rm -f CLAUDE.md docs/.solo-config.json docs/constitution.md docs/product/north-star.md
+rm -rf docs/specs/0001-wrap-build-log
+git add -A && git commit -m "chore: clear upstream identity"
+```
+
+Then run `claude` and `/onboard` — step 1.5 will catch anything left.
+
+The `curl … | bash` path above is the canonical entry; everything is wired around it.
 
 ## Prereqs
 
