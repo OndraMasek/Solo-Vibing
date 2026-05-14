@@ -1,100 +1,60 @@
-# CLAUDE.md — Solo-Setup
+# CLAUDE.md
 
-**Last updated:** 2026-05-11
+> Project instructions for Claude Code. Auto-loaded at the start of every session in this repo.
+>
+> This file is the **session instruction layer** — it imports the always-on rules, states project context, and records tool constraints. It is **not** the law. Governing principles — Core principles, Process rules, Architectural constraints, Decision-making triggers — live in `docs/constitution.md`, authored and amended by `/constitution`. CLAUDE.md points at the constitution; it does not duplicate it.
 
-## Project identity
+## Rules (always-loaded)
 
-- **Name (working):** Solo-Setup (final v1.0 name deferred per SOL-1)
-- **GitHub:** OndraMasek/Solo-Setup
-- **License:** Apache-2.0 (per SOL-2)
-- **Phase:** v0.1 in active development (target: end of W4, week of 2026-06-01)
+The six always-on conventions are imported below. Claude Code also auto-loads every `.md` file in `.claude/rules/` at session start; the explicit `@`-imports here make the dependency visible and reviewable in one place.
 
-## Linear context
+@.claude/rules/naming.md
+@.claude/rules/counter-allocation.md
+@.claude/rules/scope-labels.md
+@.claude/rules/completion-status.md
+@.claude/rules/write-discipline.md
+@.claude/rules/auditor-stance.md
 
-- **Workspace:** test-docs-generator
-- **Team:** Solo Claude Stack (prefix `SOL`)
-- **Linear projects:**
-  - `Decisions` — Q-NNN decision register (https://linear.app/test-docs-generator/project/decisions-6f8f08e0728f)
-  - `Backlog` — active work items (https://linear.app/test-docs-generator/project/backlog-1eb252b957b8)
-  - `Sync Queue` — chat→code propagation (https://linear.app/test-docs-generator/project/sync-queue-ac6b97e59a69)
-- **Branch pattern:** `SOL-<id>-<slug>` (e.g. `SOL-18-some-task`)
-- **Note on this bootstrap commit:** the `main` branch direct-commit is acceptable ONLY for SOL-17 (this ticket). Every subsequent change goes via feature branch + PR.
+## Project
 
-## Source-of-truth rules
+- **Marker:** `SOL` — the canonical value is read from `docs/.solo-config.json` (`marker` key) by every skill that mints an artifact. The value here is a convenience copy for human readers; `docs/.solo-config.json` wins on conflict. See `.claude/commands/config.md`.
+- **What this repo is:** the Solo-Setup — a public reference repository that packages a complete solo-founder workflow stack (Claude.ai project + Claude Code + Linear + GitHub + Skills + a Ralph-style automation loop + spec discipline + four-hat adversarial review) so a competent technical person can fork it and adopt the whole pipeline in under an hour. The deliverable is the repo itself, not a service.
+- **Stack / language:** language-agnostic. The repo is documentation, templates, and `.claude/` configuration — not an application. Concrete examples in the docs may pick a single language, but the stack imposes none.
 
-- Code, tests, scripts, `docs/`, `.claude/skills/`, `templates/` → **git is canonical**
-- Linear issues → Linear is canonical; never duplicate issue bodies into git
-- Linear Documents (if any) → temporary migration vehicles only; archive after mirror to git
-- ADRs in `docs/decisions/` → git is canonical; resolved Linear decision issues (`Q-NNN`/`SOL-N`) are back-references
+## Prereqs
 
-## Sync Queue protocol
+- **Claude.ai project connectors required:** Linear (workspace-scoped) and GitHub (repo read access for this repository). Both must be connected at the Claude.ai project level before /onboard runs. The repo-level declaration lives in `.mcp.json`; /onboard step 2 verifies the connection.
+- **Linear personal API key in `.env`** (set during /onboard step 3, reserved for v0.2 scripts).
 
-### At session start
-1. Read this file (`CLAUDE.md`)
-2. List Linear issues in `Sync Queue` project with label `sync:pending`
-3. For each pending ticket, read body, snapshot the body content (for pre-PR re-read check)
-4. Process in priority order
+## Workflow — the Solo-Setup cascade
 
-### Pre-PR re-read (the Astro `scope:sealed` rule)
-Before `gh pr create`:
-- Re-fetch the ticket body via Linear MCP
-- Compare to the session-start snapshot
-- `scope:sealed` ticket changed → halt and comment on the ticket asking for confirmation
-- `scope:living` ticket changed additively → continue silently; subtractively → halt
+Skill chain (each stage Task-invokes the next per its own Chains section; no hooks in v0.1):
 
-### After PR merge (or after direct-to-main commit for SOL-17 bootstrap)
-1. Comment on the Linear ticket with the commit SHA + PR URL (or commit SHA only if direct-to-main)
-2. Flip label `sync:pending` → `sync:synced`
-3. Move ticket status to Done
+`/onboard` → `/discovery` → `/constitution` → `/specify` → `/plan` → `/review` → `/update-linear` → `/build` (per child ticket) → `/wrap` → `/verify` → `/retro`
 
-## ADR conventions (per design doc 03 / SDG D-019)
+Founder-fired commands (thin, deterministic): `/start`, `/status`, `/next`, `/config`, `/map-codebase`, `/audit-self`.
 
-- **Strategic decisions** (business model, scope, regulatory, GTM, customer commitments): Linear Decisions issue first → mirror to `docs/decisions/NNNN-*.md` via Sync Queue ticket
-- **Build-time decisions** (library choice, encoding, file format, internal API): `docs/decisions/NNNN-*.md` only, with one-line back-reference in the parent build issue's session-end comment
-- **ID space:** continuous `D-NNN` across both classes. Linear back-references use `SOL-N` issue IDs where applicable.
-- **Never delete or rewrite resolved ADRs.** Amendments add a footer line; supersessions create a new ADR with the old one's Status changed to "Superseded by D-NNN".
+- **Cascade behavior** (`cascade-only` / `interactive` / `yolo`) and every workflow knob live in `docs/.solo-config.json` — see `.claude/commands/config.md`.
+- **`/build` is the one stage that does not auto-fire** — Ralph runs cost real money and produce real commits, so the go signal stays explicit. It also splits into a spawn turn and a `--finalize` turn.
+- **Halt-card rendering** is centralized in `docs/templates/halt-messages.md`. Skills compose against its named patterns; they do not inline halt-card structure.
+- **The constitution at `docs/constitution.md`** governs specs and code. `/review` (check j) and `/verify` check against it. It does not exist for this repo yet — author it via `/constitution` before the first `/specify`.
 
-## Locked decisions (do not re-litigate without raising a new Decision issue)
+## Session discipline
 
-- **D-0001 (SOL-9):** Meta-project Linear hosted in SOL team within test-docs-generator workspace
-- **D-0002 (SOL-2):** License is Apache-2.0
-- **D-0003 (SOL-1):** Working name is `Solo-Setup`; final v1.0 name deferred
-- (More to follow as additional Q-NNN issues resolve)
+- **Token budget:** target 100–200k effective tokens per Claude Code session. Estimate before committing; split sessions that will not fit.
+- **TDD is the default build cadence** — `/build` opens against the failing-test seed, not code.
+- **One ticket per `/build` run** in v0.1. One highest-priority unchecked item per Ralph iteration.
+- **Short, focused sessions** that end with a concrete artifact. No "explore the space" sessions without a written output. Founder time on this repo is limited and split with other work — sessions are sized accordingly.
+- **Self-application is the test.** This repo is built with the workflow it documents. If the stack cannot be used to build the stack, the stack is broken — treat that as a finding, not an inconvenience.
 
-## Build conventions
+## Tool constraints
 
-- Commit messages: Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`)
-- Direct commits to `main` are PROHIBITED except for SOL-17 bootstrap. After SOL-17, all changes via PR.
-- One PR per Sync Queue ticket. Code-Claude stops at `gh pr create` and waits for human merge.
-- `make check` (or equivalent) against the final commit before declaring complete (to be added when project has a build target)
+- This repo is documentation + templates, not an application — there is no test suite to run and no autonomous `/build` sandbox to configure for the repo itself. The Ralph loop, `AGENTS.md` autodetect, and `docs/onboarding/sandbox.md` concerns apply to repos that *adopt* the stack, not to this one.
+- Free-tier-first: the stack assumes Linear free tier, GitHub free repos, and Claude.ai Pro at minimum. Do not introduce a paid-tool dependency without a free-tier path.
+- Source-of-truth convention: the canonical content for every repo file lives in Linear documents (test-docs-generator workspace, Decisions project). This repo is **generated from Linear** by Claude Code. Edit the Linear doc, not the local file.
 
-## What you're not doing
+## Notes
 
-- Continuing SDG product work (different repo, different domain)
-- Domain-specific implementation (Czech invoices, named EU prospects, etc.)
-- Building a CLI tool to install the stack (docs + templates + skills only in v0.1)
-- Recording demo videos or building a marketing landing page
-- Adding a second methodology (BMAD, agent-OS, etc.) until v0.1 is published
-
-## Hard constraints
-
-- **License:** Apache-2.0. All SKILL.md files include `SPDX-License-Identifier: Apache-2.0` in their frontmatter or top comment.
-- **Knowledge cutoff:** January 2026. Current date during v0.1 development: May 2026. **Verify versions of external dependencies (Ralph plugin, spec-kit, Skills standard) via web search before citing.**
-
-## Operational hooks (in `.claude/hooks/`)
-
-- `session_start.sh` — runs at session start; reports branch, scans Sync Queue for `sync:pending`, reminds of read order
-- `pre_edit_branch_check.sh` — runs before `Edit`/`Write`/`MultiEdit`; blocks edits on `main`/`master` with exit 2; warns if branch doesn't match `SOL-<id>-<slug>`
-
-Hook configuration in `.claude/settings.json`.
-
-## Design history (pre-v0.1)
-
-The `docs/design/` directory contains 12 design notes developed in the Claude.ai meta-project before v0.1 drafting began (files numbered 00–10 plus the Astro consulting-site playbook). These are historical artifacts; the user-facing v0.1 docs in `docs/00_*.md` through `docs/13_*.md` will be drafted FROM these design notes in weeks 2–4. The design files reference the working name `solo-claude-stack` in many places — this was renamed to `Solo-Setup` per SOL-1 on 2026-05-11; references in the design files are intentionally left alone as historical record.
-
-## References
-
-- Linear workspace: https://linear.app/test-docs-generator
-- SOL team: https://linear.app/test-docs-generator/team/SOL
-- Decisions register: https://linear.app/test-docs-generator/project/decisions-6f8f08e0728f
-- Repo: https://github.com/OndraMasek/Solo-Setup
+- This file is the session instruction layer. **Governing principles do not go here** — they belong in `docs/constitution.md` via `/constitution`, so `/review` and `/verify` can check work against a stable, versioned document.
+- `docs/constitution.md` has not been authored for this repo yet. It is on the near-term path (the project's six-improvement scope includes the four-hat review process, which the constitution anchors).
+- `/onboard` never overwrites an existing `CLAUDE.md` without explicit founder confirmation.

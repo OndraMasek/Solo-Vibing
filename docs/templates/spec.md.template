@@ -1,0 +1,91 @@
+# spec: <verb-noun feature title>
+
+> Spec ID: NNNN-<slug>
+> Parent ticket: <MARKER>-N
+> Four-hat doc: [<MARKER>-DOC-NNNN] four-hat: <MARKER>-N <title>
+> spec_sha256: <set by /specify step 7 at seal; absent while draft>
+> Status: draft | sealed
+> Last updated: YYYY-MM-DD
+
+## Problem statement
+
+<1-2 paragraphs in user-meaningful terms. No implementation language. State what hurts, for whom, and why it matters now. A reader who knows nothing about the codebase should finish this section understanding the problem.>
+
+## Design & UX
+
+<Use this block for user-facing features. For backend-only features, delete it and use the API contract block below instead.>
+
+### Primary user flow
+<The main path through the feature, step by step.>
+
+### Key screens
+<Each screen or surface the user touches, and its purpose.>
+
+### Customer journey
+- **Entry:** <how the user arrives at the feature>
+- **Core moment:** <the point where the feature delivers its value>
+- **Exit:** <how the user leaves, and what state they are in afterward>
+
+### Edge cases & error states
+<Empty inputs, max-size inputs, concurrent operations, partial failures. What does the user see in each?>
+
+### External design assets
+<Links to mockups / Figma / design files. "None" if greenfield.>
+
+<--- backend-only replacement for Design & UX --->
+
+### API contract
+<Request and response shapes, error envelopes, versioning, auth headers.>
+
+### DX section
+<How a developer consumes this: example calls, SDK surface, integration points.>
+
+## Scope boundary
+
+### In scope
+- <explicit list of what this spec covers>
+
+### Out of scope
+- <explicit list of what this spec deliberately does NOT cover. Name the tempting adjacent work so the boundary is intentional, not accidental.>
+
+## Acceptance criteria
+
+Behavior-oriented and testable. Each AC becomes a checkbox on the parent ticket and is the source of at least one entry in the failing-test seed.
+
+- [ ] AC-1: <observable behavior: "user can X", "system does Y when Z">
+- [ ] AC-2: <...>
+- [ ] AC-3: <...>
+
+## Failing-test seed
+
+Language-appropriate test functions. Code-Claude scaffolds these as the first commit; they are the backpressure contract /build runs every iteration. Name each test and state what it asserts. Do not write the implementation here.
+
+- `test_<name>` — asserts <behavior>; covers AC-1.
+- `test_<name>` — asserts <behavior>; covers AC-2.
+- `test_<name>` — asserts <behavior>; covers AC-3.
+
+Every AC must be covered by at least one named test. An AC with no seed coverage is a /specify defect — /plan's decomposer halts the cascade on it (halt-messages.md §incomplete-failing-test-seed).
+
+## Related research findings
+
+Verbatim bullets from /discovery Phase 2, each linked to its research summary and deep report.
+
+- <finding copied verbatim from the research summary's Key Findings> — [<MARKER>-DOC-NNNN] research: <topic>; deep report `docs/research/NNNN-<slug>.md`
+- <...>
+
+"None — spec authored without a discovery phase" is a valid entry for specs that did not go through /discovery.
+
+## Clarifications
+
+<Appended by /specify step 5 after the clarify-walker pass. One subsection per applicable surface. This section is absent until the clarify phase runs.>
+
+### <surface name, e.g. Auth & permissions>
+<clarifying question, and the founder's recorded answer>
+
+## Open Questions
+
+<Deferred four-hat findings and unanswerable clarifications, each with rationale. /build mirrors these into fix_plan.md marked [defer] — they are not active build items.>
+
+- <deferred item> — rationale: <why deferred rather than incorporated or rejected>
+
+<!-- Rejected four-hat findings are recorded inline as margin notes at the relevant section, prefixed: "Rejected (four-hat <hat>): <rationale>". They do not appear in this list. -->

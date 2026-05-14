@@ -1,0 +1,41 @@
+# AGENTS.md — {{TICKET_ID}}
+
+Concrete project commands for this repo. The Ralph loop runs the Backpressure commands every iteration, in the order listed. Code-Claude reads this file every iteration to know how to verify its own work.
+
+## Commands
+
+| Command | Invocation |
+| -- | -- |
+| test | {{TEST_CMD}} |
+| typecheck | {{TYPECHECK_CMD}} |
+| lint | {{LINT_CMD}} |
+| build | {{BUILD_CMD}} |
+| format | {{FORMAT_CMD}} |
+
+<not detected — fill in or remove> means autodetect could not resolve the command. Either supply it or delete the row if the project genuinely has no such command.
+
+## Backpressure order
+
+The loop runs these in order each iteration. The first one that fails halts backpressure for that iteration — later commands are not run until the failure is fixed. Order is cheapest-and-most-fundamental first:
+
+1. typecheck
+2. lint
+3. test
+4. build
+
+`format` is not a backpressure gate — it is run by Code-Claude as part of doing the work, not as a pass/fail check. Drop any line above whose command was removed from the Commands table.
+
+## Hermetic commands only
+
+Every command in the Commands table MUST be hermetic:
+
+- **No external API calls.** Tests must not hit live third-party services, production databases, or the network. Use fixtures, mocks, or local test doubles.
+- **No non-test-scoped side effects.** A command must not leave artifacts outside its own scratch space, mutate the developer's global state, or depend on machine-specific setup beyond what the sandbox provides.
+- **Deterministic.** Same input, same result. No reliance on wall-clock time, random seeds without pinning, or external state.
+
+Non-hermetic commands make backpressure unreliable: the loop cannot tell "my code is wrong" from "the network blipped." If the project's real test command is non-hermetic, define a hermetic subset here and note the gap for the founder.
+
+## Notes
+
+- These commands are the contract between the spec's failing-test seed and the Ralph loop. The `test` command must be the one that runs the seed's named test functions.
+- If the founder filled this in manually (autodetect was exhausted), they should persist the values to `docs/.solo-config.json` so the next /build on this repo does not re-prompt.

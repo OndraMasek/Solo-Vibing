@@ -1,0 +1,62 @@
+# CLAUDE.md
+
+> Project instructions for Claude Code. Auto-loaded at the start of every session in this repo.
+>
+> This file is the **session instruction layer** — it imports the always-on rules, states project context, and records tool constraints. It is **not** the law. Governing principles — Core principles, Process rules, Architectural constraints, Decision-making triggers — live in `docs/constitution.md`, authored and amended by `/constitution`. CLAUDE.md points at the constitution; it does not duplicate it.
+
+## Rules (always-loaded)
+
+The six always-on conventions are imported below. Claude Code also auto-loads every `.md` file in `.claude/rules/` at session start; the explicit `@`-imports here make the dependency visible and reviewable in one place.
+
+@.claude/rules/naming.md
+@.claude/rules/counter-allocation.md
+@.claude/rules/scope-labels.md
+@.claude/rules/completion-status.md
+@.claude/rules/write-discipline.md
+@.claude/rules/auditor-stance.md
+
+## Project
+
+- **Marker:** `<MARKER>` — the canonical value is read from `docs/.solo-config.json` (`marker` key) by every skill that mints an artifact. The value here is a convenience copy for human readers; `docs/.solo-config.json` wins on conflict. See `.claude/commands/config.md`.
+- **What this repo is:** <!-- founder: one or two sentences — what the repo produces and who it is for. -->
+- **Stack / language:** <!-- founder: primary language(s), framework(s), runtime. Write "language-agnostic" if that applies. -->
+
+## Prereqs
+
+- **Claude.ai project connectors required:** Linear (workspace-scoped) and GitHub (repo read access for this repository). Both must be connected at the Claude.ai project level before /onboard runs. The repo-level declaration lives in `.mcp.json`; /onboard step 2 verifies the connection.
+- **Linear personal API key in `.env`** (set during /onboard step 3, reserved for v0.2 scripts).
+
+## Workflow — the Solo-Setup cascade
+
+Skill chain (each stage Task-invokes the next per its own Chains section; no hooks in v0.1):
+
+`/onboard` → `/discovery` → `/constitution` → `/specify` → `/plan` → `/review` → `/update-linear` → `/build` (per child ticket) → `/wrap` → `/verify` → `/retro`
+
+Founder-fired commands (thin, deterministic): `/start`, `/status`, `/next`, `/config`, `/map-codebase`, `/audit-self`.
+
+- **Cascade behavior** (`cascade-only` / `interactive` / `yolo`) and every workflow knob live in `docs/.solo-config.json` — see `.claude/commands/config.md`.
+- **`/build` is the one stage that does not auto-fire** — Ralph runs cost real money and produce real commits, so the go signal stays explicit. It also splits into a spawn turn and a `--finalize` turn.
+- **Halt-card rendering** is centralized in `docs/templates/halt-messages.md`. Skills compose against its named patterns; they do not inline halt-card structure.
+- **The constitution at `docs/constitution.md`** governs specs and code. `/review` (check j) and `/verify` check against it.
+
+## Session discipline
+
+<!-- founder: project-specific session conventions. The defaults below are the Solo-Setup baseline — edit to fit. -->
+
+- **Token budget:** target 100–200k effective tokens per Claude Code session. Estimate before committing; split sessions that will not fit.
+- **TDD is the default build cadence** — `/build` opens against the failing-test seed, not code.
+- **One ticket per `/build` run** in v0.1. One highest-priority unchecked item per Ralph iteration.
+- **Short, focused sessions** that end with a concrete artifact.
+
+## Tool constraints
+
+<!-- founder: tool, network, or environment constraints specific to this repo. Examples: -->
+<!-- - Sandbox boundary for autonomous /build runs: documented in docs/onboarding/sandbox.md -->
+<!-- - Allowed network domains for the build environment -->
+<!-- - CI / test-runner specifics not captured in .claude/skills/build's AGENTS.md autodetect -->
+
+## Notes
+
+- This file is a **scaffold** after `/onboard`. Edit it — add project-specific principles, tool constraints, naming notes. It is yours to evolve as the project's discipline matures.
+- **Do not put governing principles here.** Core principles, process rules, and architectural constraints belong in `docs/constitution.md` via `/constitution`. CLAUDE.md is the session instruction layer; the constitution is the law. Keeping them separate is what lets `/review` and `/verify` check work against a stable, versioned governing document.
+- `/onboard` never overwrites an existing `CLAUDE.md` without explicit founder confirmation — once you have edited this file, re-running `/onboard` preserves your version.
