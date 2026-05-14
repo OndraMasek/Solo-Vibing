@@ -28,6 +28,7 @@ parallelization.enabled           true            (default: true)
 workflow.verify                   true            (default: true)
 workflow.auto_retro               true            (default: true)
 workflow.followup_tickets         true            (default: true)
+workflow.discovery_surface        chat            (default: chat)
 ralph.max_iterations              30              (default: 30)
 ralph.max_wall_hours              4               (default: 4)
 ralph.max_usd_cost                50              (default: 50)
@@ -52,7 +53,8 @@ ralph.max_usd_cost                50              (default: 50)
   "workflow": {
     "verify": true | false,
     "auto_retro": true | false,
-    "followup_tickets": true | false
+    "followup_tickets": true | false,
+    "discovery_surface": "chat" | "code"
   },
   "ralph": {
     "max_iterations": <integer > 0>,
@@ -73,6 +75,7 @@ ralph.max_usd_cost                50              (default: 50)
 | `workflow.verify` | When `true`, /wrap's last-child completion invokes /verify before transitioning the parent to Done. When `false`, the parent transitions directly to Done after the last /wrap. |
 | `workflow.auto_retro` | When `true`, parent → Done auto-fires /retro. When `false`, /retro is manual-only. |
 | `workflow.followup_tickets` | When `true`, /retro auto-creates Backlog tickets for each Followups-section item. When `false`, followups stay as text in the retro doc. |
+| `workflow.discovery_surface` | `chat` (default): /onboard step 7 captures the north-star Q1 answer and step 8 renders `docs/onboarding/chat-kickoff.md` + `chat-instructions.md`; /discovery is run by the founder in claude.ai chat. `code`: /onboard step 7 Task-invokes /discovery directly and skips step 8 — reserved for self-testing the Solo-Setup repo itself, which doesn't have a chat-side counterpart. Changing this knob post-onboard requires re-running `/onboard --reinit 7` (and `--reinit 8` in chat mode). |
 | `ralph.max_iterations` | Hard cap on Ralph loop iterations per /build run. Default 30. Checked post-iteration in `run.sh` — the count can reach the cap, not exceed it. |
 | `ralph.max_wall_hours` | Hard cap on wall-clock hours per /build run. Default 4. Checked post-iteration. |
 | `ralph.max_usd_cost` | Hard cap on cumulative USD cost per /build run. Default 50. Checked post-iteration, so actual spend can exceed the cap by up to one iteration's worth. Cumulative across `--continue` runs. |
@@ -90,7 +93,8 @@ Shipped as `docs/templates/.solo-config.json.template`:
   "workflow": {
     "verify": true,
     "auto_retro": true,
-    "followup_tickets": true
+    "followup_tickets": true,
+    "discovery_surface": "chat"
   },
   "ralph": {
     "max_iterations": 30,

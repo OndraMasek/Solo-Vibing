@@ -8,26 +8,31 @@ Solo-Setup packages a complete solo-founder workflow — heavyweight specs, four
 
 ## What's in here
 
-- [`CLAUDE.md`](./CLAUDE.md) — session instruction layer, loaded by Claude Code at the start of every session.
+- [`CLAUDE.md`](./CLAUDE.md) — session instruction layer, loaded by Claude Code at the start of every session in the repo. **Not** shipped to forks; rendered from the `.template` version by /onboard.
+- [`docs/templates/onboarding/chat-instructions.md.template`](./docs/templates/onboarding/chat-instructions.md.template) — sister artifact for chat-Claude on claude.ai. Rendered by /onboard step 8 alongside `chat-kickoff.md` so the founder can run /discovery in chat with full context.
 - [`.claude/rules/`](./.claude/rules/) — six always-on rules: `naming`, `counter-allocation`, `scope-labels`, `completion-status`, `write-discipline`, `auditor-stance`.
 - [`.claude/skills/`](./.claude/skills/) — the cascade skills: `onboard`, `discovery`, `constitution`, `specify`, `plan`, `review`, `update-linear`, `build`, `wrap`, `verify`, `retro`.
 - [`.claude/commands/`](./.claude/commands/) — thin founder-fired commands: `start`, `status`, `next`, `config`, `map-codebase`, `audit-self`.
 - [`.claude/agents/`](./.claude/agents/) — subagents invoked mid-skill: four-hat panel, `build-reviewer`, `decomposer`, `diagnoser`, `research-investigator`, `codebase-mapper`, `clarify-walker`.
-- [`docs/constitution.md`](./docs/constitution.md) — the project's governing principles, checked against by `/review` and `/verify`.
-- [`docs/templates/`](./docs/templates/) — scaffolds used by skills (`spec.md.template`, `halt-messages.md`, Ralph `run.sh`, `AGENTS.md`, `CLAUDE.md`, `PROMPT.md`).
-- [`docs/specs/0001-wrap-build-log/`](./docs/specs/0001-wrap-build-log/) — a worked-example sealed spec.
+- [`docs/constitution.md`](./docs/constitution.md) — Solo-Setup's own governing principles. **Not** shipped to forks; forks re-author via /constitution.
+- [`docs/templates/`](./docs/templates/) — scaffolds used by skills (`spec.md.template`, `halt-messages.md`, Ralph `run.sh`, `AGENTS.md`, `CLAUDE.md`, `PROMPT.md`, plus `discovery/` prereq templates and `onboarding/` chat handoff templates).
+- [`scripts/`](./scripts/) — onboard helpers: `check_prereqs.sh` and `verify_linear_key.sh`.
+- [`docs/specs/0001-wrap-build-log/`](./docs/specs/0001-wrap-build-log/) — Solo-Setup's own worked-example sealed spec. **Not** shipped to forks.
 - [`docs/decisions/`](./docs/decisions/) — append-only ADR log.
-- [`docs/.solo-config.json`](./docs/.solo-config.json) — workflow knobs (marker, cascade mode, model profile, Ralph caps). Per-fork; edit after `/onboard`.
+- [`docs/.solo-config.json`](./docs/.solo-config.json) — workflow knobs (marker, cascade mode, model profile, Ralph caps, `workflow.discovery_surface`). **Not** shipped to forks; rendered from the `.template` version by /onboard.
 
 ## The cascade
 
 ```
-/onboard → /discovery → /constitution → /specify → /plan → /review → /update-linear
-                                                                       ↓
-                                              /build (per child) → /wrap → /verify → /retro
+/onboard ──┐
+           ├─→ /discovery (in chat)  ──→ /constitution (seeded in chat)
+           │
+/specify ──→ /plan → /review → /update-linear
+                                      ↓
+                       /build (per child) → /wrap → /verify → /retro
 ```
 
-Each stage Task-invokes the next per its own Chains section; the founder fires `/onboard` once, then `/build <MARKER>-N-K` per child ticket. Everything else cascades.
+`/onboard` runs once in Claude Code, then hands off to chat-Claude (claude.ai project) for /discovery + /constitution-seed. /specify and everything downstream runs in Claude Code. The cascade is described in detail in [`CLAUDE.md` §Where work happens](./CLAUDE.md).
 
 ## Using this template
 
@@ -40,7 +45,9 @@ mkdir my-project && cd my-project
 curl -fsSL https://raw.githubusercontent.com/OndraMasek/Solo-Vibing/main/bootstrap.sh | bash
 ```
 
-The script (see [`bootstrap.sh`](./bootstrap.sh)) downloads the latest template into the current directory and initializes a fresh git repo on `main`. From there:
+> Note: the GitHub-side repo is currently hosted at `OndraMasek/Solo-Vibing`; the canonical name of the workflow stack is "Solo-Setup". The two will be reconciled in a future GitHub rename.
+
+The script (see [`bootstrap.sh`](./bootstrap.sh)) downloads the latest template into the current directory, initializes a fresh git repo on `main`, and offers to create the GitHub remote via `gh repo create` to avoid parallel-history conflicts on first push. From there:
 
 ```bash
 claude         # launch Claude Code in this folder
@@ -52,9 +59,13 @@ And as the first command inside Claude Code:
 /onboard
 ```
 
-`/onboard` walks you through: picking your project marker, verifying Linear + GitHub connectors in your Claude.ai project, creating `.env` for your Linear API key, and seeding the first north-star question. After that the cascade takes over.
+`/onboard` walks you through three substantive interactions:
 
-Pushing to GitHub is optional and can wait — once you want a remote, run `gh repo create --source=. --push --private` (or use the GitHub web UI).
+1. **Marker pick** — your repo-scoped project identifier (`MYA`, `PRJ`, etc.).
+2. **Linear API key paste** — into `.env`, never into chat.
+3. **First north-star question** — seeds /discovery.
+
+Everything else is yes/no confirmation: connectors, GitHub remote, upstream-content audit, Linear team selection. At the end, /onboard renders `docs/onboarding/chat-kickoff.md` and `docs/onboarding/chat-instructions.md` — open your Claude.ai project, attach the instructions, paste the kickoff message, and /discovery runs there.
 
 ### Alternative: GitHub "Use this template"
 
@@ -66,8 +77,9 @@ If you'd rather start from GitHub's UI:
 
 ## Prereqs
 
-- Claude.ai Pro (or higher) project with Linear + GitHub connectors.
+- Claude.ai Pro (or higher) project with Linear + GitHub connectors at the project level.
 - Claude Code installed in your terminal.
+- `gh` CLI installed and authed (recommended; bootstrap uses it to create the GitHub remote without auto-init conflicts).
 - Linear free tier is sufficient; GitHub free repos are sufficient. The stack assumes a free-tier-first floor; no paid-tool dependency is introduced without a free-tier path.
 
 ## License

@@ -17,6 +17,18 @@ Parent ticket title: `[<MARKER>] <verb-noun>`. Example: `[SOL] add cascade orche
 
 Child ticket title: convention set by /plan when it drafts children. Leaving open until /plan is redrafted in Batch 3 — likely `<verb-noun>` (no bracket prefix, since the parent context is carried by parentId and Linear's auto-assigned identifier).
 
+## Shared Linear teams
+
+A Linear team belongs to its workspace and has a single team key (`SOL`, `OMA`, etc.). The Solo-Setup marker is repo-scoped and independent of the team key. When two repos with different markers share a team, Linear's UI shows team-keyed ticket IDs for both — a `BOM`-marker ticket in the `SOL` team appears as `SOL-47` in Linear, with `[BOM]` only in the title.
+
+Implications:
+
+- Ticket IDs in Linear's UI follow the team's key prefix; the marker is a title-level discriminator, not an identifier-level one.
+- Cross-team workflows (multiple repos, multiple markers) must filter by title-prefix label or by a shared `marker:<MARKER>` label per ticket to disambiguate at scale.
+- The cleanest separation is one Linear team per marker. Solo-Setup does not enforce this — onboarding accepts shared teams — but downstream skill queries that filter by marker need this awareness baked in.
+
+`/onboard` surfaces this trade-off at step 4 (marker pick) so founders set expectations before tickets accumulate.
+
 ## Branch names
 
 - Parent branch (rare, only if work happens at the parent level): `<MARKER>-N-<slug>`.
@@ -26,7 +38,23 @@ Slug is 2–4 words, kebab-case, founder-confirmed during /specify step 6. The p
 
 ## Linear doc IDs
 
-Format: `[<MARKER>-DOC-NNNN]`. Type prefix follows in the doc title: `[<MARKER>-DOC-NNNN] four-hat: <MARKER>-N <title>`, `[<MARKER>-DOC-NNNN] research: <topic>`, `[<MARKER>-DOC-NNNN] audit: <topic>`. NNNN is the `doc`-counter value (allocated per `counter-allocation.md`), zero-padded to 4 digits.
+Format: `[<MARKER>-DOC-NNNN]`. Type prefix follows in the doc title. NNNN is the `doc`-counter value (allocated per `counter-allocation.md`), zero-padded to 4 digits.
+
+Type prefixes currently in use:
+
+- `four-hat: <MARKER>-N <title>` — /specify
+- `research: <topic>` — /discovery (Phase 2)
+- `audit: <topic>` — /audit-self
+- `discovery: state` — /discovery (cross-phase resume anchor; single mutable doc per project)
+- `discovery: idea-brief-v<N>` — /discovery (Phase 1, one per iteration, append-only)
+- `discovery: challenge-memo-iter<N>` — /discovery (Phase 3, one per iteration)
+- `constitution: v<semver>` — /constitution (seed + amendments)
+- `retro: <MARKER>-N <title>` — /retro
+- `verify: <MARKER>-N <title>` — /verify (when mirroring report to Linear)
+- `review: <MARKER>-N <title>` — /review (cascade-stage doc)
+- `adr-mirror: NNNN-<slug>` — /review (auto-ADR Linear mirror)
+
+All Solo-Setup-side Linear writes use this convention; deviation breaks the `doc`-counter scan defined in `counter-allocation.md`.
 
 ## File paths
 

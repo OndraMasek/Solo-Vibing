@@ -44,7 +44,7 @@ No other counter has shared allocations in v0.1.
 |---|---|
 | `spec` | /specify (on seal) |
 | `adr`  | /review (auto-ADR on check h), founder (manual ADR authoring) |
-| `doc`  | /specify (four-hat doc), /review (review doc, auto-ADR Linear mirror), /discovery (research summary + deep report — shared), /verify (verify-report Linear mirror, when applicable), /retro (retro doc), /constitution (constitution doc) |
+| `doc`  | /specify (four-hat doc), /review (review doc, auto-ADR Linear mirror), /discovery (research summary + deep report — shared; **discovery state doc**; **idea-brief docs per iteration**; **challenge-memo docs per iteration**), /verify (verify-report Linear mirror, when applicable), /retro (retro doc), /constitution (constitution doc) |
 
 Every other skill must reference this rule rather than allocate inline.
 

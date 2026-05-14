@@ -278,15 +278,16 @@ Skills reference these patterns by name when they halt — e.g. `halt-card per d
 
 ### §corrupted-discovery-state
 
-**When:** /discovery cannot parse `docs/.discovery-state.json`.
+**When:** /discovery cannot locate or parse the `[<MARKER>-DOC-NNNN] discovery: state` Linear document — doc deleted, doc body unparseable, or no such doc exists.
 
-**Recommendation:** Move the corrupt state to `docs/discovery/archive/<timestamp>-corrupt/.discovery-state.json` and re-invoke /discovery; resume from the most recent `idea-brief-v<N>.md`'s Phase 1 fields.
-**Rationale:** The state file is the resume anchor; with it gone, restart Phase 1 from the existing brief artifacts.
+**Recommendation:** Rename the corrupt state doc to `[<MARKER>-DOC-NNNN] discovery: state (corrupt-<timestamp>)` (preserving it as audit trail), then re-invoke /discovery to allocate a fresh state doc. Resume Phase 1 from the most recent `[<MARKER>-DOC-NNNN] discovery: idea-brief-v<N>` document's content.
+**Rationale:** The state doc is the cross-surface resume anchor; with it gone or unreadable, the idea-brief docs hold the last good Phase 1 state and the surviving artifacts (research summaries, challenge memos) are still retrievable in Linear. Re-creating state preserves prior work.
 
 **Alternatives:**
-1. Hand-edit the state file if the corruption is visible (e.g. truncated JSON) — niche.
+1. Hand-edit the state doc body in Linear if the corruption is visible (e.g. truncated JSON in the document's code block) — niche, but possible because Linear documents are mutable.
+2. Restart /discovery from Phase 1 if no idea-brief docs exist — full restart is rare but is the documented escape hatch.
 
-**Diagnostic context:** parse error, last good iteration number from `idea-brief-v<N>.md`.
+**Diagnostic context:** parse error or Linear MCP error string, last good iteration number from any `discovery: idea-brief-v<N>` doc, the state doc's `[<MARKER>-DOC-NNNN]` ID.
 
 ---
 
@@ -323,12 +324,12 @@ Skills reference these patterns by name when they halt — e.g. `halt-card per d
 
 **When:** A required context file is missing (spec markdown, north-star, idea-brief, config file, template).
 
-**Recommendation:** Create the missing artifact via the appropriate upstream skill or template.
-**Rationale:** /build, /plan, /verify, /constitution all halt rather than guess at missing inputs.
+**Recommendation:** For /onboard step 1 template-set gaps, run `bash bootstrap.sh --refresh-templates` to re-overlay the upstream template files without touching project state. For all other cases, create the missing artifact via the appropriate upstream skill.
+**Rationale:** /build, /plan, /verify, /constitution all halt rather than guess at missing inputs. The Bomber-test findings showed that fresh forks could reach this halt with no fixable recovery — `--refresh-templates` closes that escape hatch.
 
-**Alternatives:** none — context resolution is mandatory.
+**Alternatives:** none — context resolution is mandatory. Do not re-clone the template repo; that destroys `.env`, marker selection, and any post-onboard work.
 
-**Diagnostic context:** missing file path, the skill or process that creates it (e.g. `docs/product/north-star.md` is written by /discovery's approve exit).
+**Diagnostic context:** missing file path(s), the skill or process that creates it (e.g. `docs/product/north-star.md` is written by /discovery's approve exit).
 
 ---
 
@@ -382,6 +383,36 @@ Skills reference these patterns by name when they halt — e.g. `halt-card per d
 **Alternatives:** none for the gitignore case — it is security-load-bearing. For an invalid key, rotating it in Linear and re-pasting is the only path.
 
 **Diagnostic context:** which prereq failed, the file path involved, `.env` gitignore status.
+
+---
+
+### §github-remote-missing
+
+**When:** /onboard step 2.5 found no `origin` remote configured. The local repo has commits but no place to push them.
+
+**Recommendation:** `gh repo create <name> --source=. --private --push --remote=origin` from the repo root (requires `gh` installed and authed).
+**Rationale:** The canonical happy path is to let `gh` create the GitHub repo with no auto-init, so first push lands on a clean remote with single linear history. Bootstrap should have offered this; reaching this halt means either bootstrap ran before `gh` was authed, or the founder declined the bootstrap prompt.
+
+**Alternatives:**
+1. Manual setup: create the GitHub repo via the web UI **without** "Initialize this repository with a README" checked, then `git remote add origin <url>` and `git push -u origin main`. The auto-init box is what causes the parallel-history conflict — leave it off.
+2. Skip the remote entirely (defer GitHub push to later). Chat-Claude will not be able to read the repo via the GitHub connector until a remote exists, so /discovery in chat will be blind to repo state — only do this if you intend to stay in code mode for /discovery.
+
+**Diagnostic context:** `git remote -v` output, `gh auth status` output, repo directory name (used as default repo name).
+
+---
+
+### §parallel-history-risk
+
+**When:** /onboard step 2.5's auto-push (after step 6's commit) failed against the GitHub remote because the remote has commits that do not share history with the local branch. Typically caused by pre-creating the GitHub repo via the web UI with "Initialize this repository with a README" checked.
+
+**Recommendation:** If the remote contains only auto-init noise (README / LICENSE / .gitignore from GitHub's templates), force-with-lease the local history over it: `git push --force-with-lease origin main`. Verify the remote is empty of intentional work first.
+**Rationale:** A parallel-history conflict on a fresh fork is almost always an unintended GitHub auto-init. The local history is the canonical one — it was created by bootstrap.sh with the founder's first commit. Force-pushing replaces the unwanted remote init.
+
+**Alternatives:**
+1. Merge with unrelated histories: `git merge --allow-unrelated-histories origin/main` and resolve conflicts (founder-friendly but verbose; preserves the auto-init commit as ancestor — usually undesirable).
+2. Recreate the remote: delete the GitHub repo, run `gh repo create <name> --source=. --private --push` to recreate without auto-init.
+
+**Diagnostic context:** `git log --oneline -5` of local, `git log --oneline -5 origin/main`, common-ancestor check (`git merge-base local origin/main` returns nothing on parallel histories).
 
 ---
 

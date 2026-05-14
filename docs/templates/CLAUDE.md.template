@@ -39,6 +39,22 @@ Founder-fired commands (thin, deterministic): `/start`, `/status`, `/next`, `/co
 - **Halt-card rendering** is centralized in `docs/templates/halt-messages.md`. Skills compose against its named patterns; they do not inline halt-card structure.
 - **The constitution at `docs/constitution.md`** governs specs and code. `/review` (check j) and `/verify` check against it.
 
+## Where work happens
+
+Surface mapping (chat-Claude on claude.ai vs Claude Code in the terminal) and persistence target per cascade stage. `/onboard` writes a sister artifact for chat-Claude at `docs/onboarding/chat-instructions.md` — open the Claude.ai project and attach it.
+
+| Stage | Surface | Persistence target |
+| --- | --- | --- |
+| `/onboard` | code | repo (this file + `docs/.solo-config.json` + `docs/onboarding/*.md`) |
+| `/discovery` | chat (default; configurable via `workflow.discovery_surface`) | Linear documents |
+| `/constitution` | chat (seed) / code (amendments) | Linear doc + `docs/constitution.md` |
+| `/specify` | code | Linear ticket + Linear four-hat doc + `docs/specs/NNNN-<slug>/spec.md` |
+| `/plan`, `/review`, `/update-linear` | code | Linear ticket + Linear review doc |
+| `/build`, `/wrap` | code | Linear ticket + repo (git commits via Ralph) |
+| `/verify`, `/retro` | code | Linear ticket + Linear doc |
+
+Source-of-truth rule: when chat and repo could both hold the same artifact, **Linear is canonical**. The repo on GitHub is generated from Linear by Claude Code, not the other way around. /discovery and /constitution-seed write to Linear only; code-side skills write to both Linear and the repo.
+
 ## Session discipline
 
 <!-- founder: project-specific session conventions. The defaults below are the Solo-Setup baseline — edit to fit. -->

@@ -1,0 +1,68 @@
+# Chat instructions — `<MARKER>`
+
+> Project instructions for chat-Claude (claude.ai). Pair file to repo-side `CLAUDE.md`. Auto-loaded once attached to the Claude.ai project's Project knowledge.
+
+## Project
+
+- **Marker:** `<MARKER>` — repo-scoped. Linear ticket IDs use the team's key prefix; the marker lives in titles (`[<MARKER>] feature-name`) and document IDs (`[<MARKER>-DOC-NNNN]`).
+- **Repo:** see Project knowledge for the GitHub URL.
+- **Linear workspace:** connected via the Linear connector at project level.
+
+## Connectors required
+
+- **Linear** (project-level). Used to read/write tickets, documents, and cycles.
+- **GitHub** (project-level). Used to read the repo — skills, rules, templates, prior specs.
+
+If either is disconnected, halt and ask the founder to attach it before proceeding.
+
+## Persistence convention
+
+**Linear is canonical.** Every artifact produced in chat is written to a Linear document under the `[<MARKER>-DOC-NNNN]` pattern. The repo on GitHub is generated from Linear by Claude Code — chat-Claude never writes to local files.
+
+Document type prefixes (allocated per `.claude/rules/counter-allocation.md` in the repo):
+
+- `[<MARKER>-DOC-NNNN] discovery: state` — single mutable state document, updated each phase transition.
+- `[<MARKER>-DOC-NNNN] discovery: idea-brief-v<N>` — one per iteration, append-only.
+- `[<MARKER>-DOC-NNNN] discovery: challenge-memo-iter<N>` — one per iteration.
+- `[<MARKER>-DOC-NNNN] research: <topic>` — one per research prompt; pairs with the deep report at `docs/research/NNNN-<slug>.md` (written by `/build` later).
+- `[<MARKER>-DOC-NNNN] constitution: v<semver>` — seed and amendments.
+
+## Skills location
+
+Skills live in the repo under `.claude/skills/<name>/SKILL.md`. Read them via the GitHub connector before invoking. Active in chat:
+
+- `/discovery` — five-phase north-star validation. Runs here.
+- `/constitution` — drafts and amends `docs/constitution.md`. Runs here in seed mode; can also be invoked in Code for amendments.
+
+Everything downstream (`/specify`, `/plan`, `/review`, `/build`, `/wrap`, `/verify`, `/retro`) runs in Claude Code, not chat.
+
+## Where work happens
+
+| Stage | Surface | Persistence target |
+| --- | --- | --- |
+| `/discovery` | chat | Linear doc |
+| `/constitution` | chat | Linear doc + `docs/constitution.md` (Code writes the file) |
+| `/specify` | code | Linear ticket + Linear doc + `docs/specs/NNNN-<slug>/spec.md` |
+| `/plan`, `/review`, `/update-linear` | code | Linear ticket + Linear doc |
+| `/build`, `/wrap` | code | Linear ticket + repo (git commits) |
+| `/verify`, `/retro` | code | Linear doc + ticket |
+
+## Rules (always-loaded — read from repo via GitHub connector)
+
+- `.claude/rules/naming.md` — ticket IDs, slugs, file paths.
+- `.claude/rules/counter-allocation.md` — how to allocate `NNNN` for new docs.
+- `.claude/rules/scope-labels.md` — `scope:specified` / `scope:planned` / `scope:sealed` / `scope:built`.
+- `.claude/rules/completion-status.md` — `DONE` / `DONE_WITH_CONCERNS` / `BLOCKED` / `NEEDS_CONTEXT`.
+- `.claude/rules/write-discipline.md` — same-turn batching, no skill-chaining writes.
+- `.claude/rules/auditor-stance.md` — voice and shape of critique output.
+
+## Session discipline
+
+- **One phase per chat turn.** `/discovery` is interactive — pause between Phases for founder confirmation.
+- **Cite Linear doc IDs.** Every reference to prior state names the `[<MARKER>-DOC-NNNN]` it lives in. No "I remember from earlier in this chat" — chat memory is not durable.
+- **Linear-first writes.** When in doubt, write to Linear, not the chat transcript.
+
+## Notes
+
+- **Do not put governing principles here.** Those live in `docs/constitution.md` (Code-authored). This file is chat-Claude's session instruction layer — equivalent to repo-side `CLAUDE.md`.
+- **`<MARKER>` is substituted by `/onboard` step 8** at render time. Re-running `/onboard --reinit 8` regenerates this file.
