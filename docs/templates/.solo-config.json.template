@@ -9,11 +9,19 @@
     "verify": true,
     "auto_retro": true,
     "followup_tickets": true,
-    "discovery_surface": "chat"
+    "discovery_surface": "chat",
+    "default_strategy": ""
   },
   "ralph": {
     "max_iterations": 30,
     "max_wall_hours": 4,
     "max_usd_cost": 50
-  }
+  },
+  "_comment_invariance": "Refactor-spike invariance predicate config. pass_set_capture_command is a shell command producing one passing-test ID per line on stdout, exiting 0 on success. Required for refactor-spike-strategy specs at /verify time; empty by default. See docs/.solo-config.example.json for per-runner examples. Per D3.3 \u00a7Refactor-spike invariance predicate.",
+  "invariance": {
+    "pass_set_capture_command": "",
+    "pass_set_capture_timeout_seconds": 300
+  },
+  "_comment_workflow": "Optional product-level workflow defaults. workflow.default_strategy seeds /specify step 1's strategy proposal; empty string means no product-level default. Slot ships in v0.2; behavioral wiring (/onboard step 7 writes the value; /specify step 1 reads it as the proposal seed) is deferred to Child 0001-B. Per D3.1 \u00a7/onboard product-level default; parent spec Open Question 4.",
+  "_comment_invariance_timeout": "Refactor-spike invariance predicate config (cont). pass_set_capture_timeout_seconds is the max wall-time (in seconds) for invariance.pass_set_capture_command; the /verify skill halts \u00a7invariance-config-missing/capture-timed-out if exceeded. Default 300 (5 min). Per Child D apply-time queue item #2."
 }

@@ -128,11 +128,21 @@ Per `completion-status.md`. /discovery is multi-phase and resumable — emit per
 
 For partial runs (founder ended the chat mid-Phase): emit `DONE` for that chat session with a note that the `discovery: state` Linear doc holds the resume point. Pausing is by design, not failure.
 
-## Chains
+## /Chains
 
-- **approve exit**: Task-invoke /constitution per audit decision #9. /constitution writes v1.0.0; then /specify becomes available to the founder. No auto-chain from /constitution to /specify — sit-time on the north-star is healthy. The constitution is non-optional: /specify hard-requires it.
-- **kill exit**: terminal.
-- **pivot exit**: auto-restarts Phase 1 with pivot context internal to /discovery (not a Task-invocation chain — same skill re-entry).
+**Pattern:** P (phase-internal)
+**Group:** B
+**Within-group transitions:** Phase 1 → Phase 2 → Phase 3 (per `/discovery`'s three-phase internal protocol). Each phase's seal is an advisory PreCompact safe boundary (per D2.3 v1.3 §Within-group safe boundaries Group B row). Continuation is project-instruction-driven: after Phase N's output seals (Phase 1's domain map; Phase 2's drill-down notes; Phase 3's idea-brief), this skill instructs the model in-chat to begin Phase N+1's flow. No Task-invoke between phases (chat-Claude has no Task surface for intra-skill chaining; the model continues the narrative within the same chat).
+**Group exit trigger:** idea-brief seal at Phase 3's completion. The idea-brief is the load-bearing output `/constitution` consumes; its seal is gated on `/discovery`'s own manifest at `.cascade/manifests/<idea-brief-id>-discovery.json` being written with the `discovery.idea-brief-sealed` gate evaluation passing (per D3.4, if defined; otherwise the standard provenance gate suffices).
+**Group exit render:** chat-end card per `docs/templates/chat-end-card.md`, variant `normal`. After render, set `cascade:run-state.last_completed_group = "B"`, write `cascade:run-state.last_completed_group_exit_manifest_path = ".cascade/manifests/<idea-brief-id>-discovery.json"`, flush, write `.cascade/handoff/last.md`. Do not Task-invoke anything.
+**Next group entry:** C (`/constitution`). The founder pastes the handoff prompt into a new chat.
+**Auto-fire compact handling:** not applicable. Group B runs in chat-Claude; no live PreCompact hook.
+**Group's exit manifest:** this skill's own manifest at `.cascade/manifests/<idea-brief-id>-discovery.json`. No chain intermediates (Phase 1 and Phase 2 outputs are intra-skill artifacts; only the idea-brief at Phase 3 produces a sealed manifest).
+
+### v0.1 carry-forward (non-approve exits)
+
+- **kill exit**: terminal. No chat-end card; the killed-idea ticket is the artifact.
+- **pivot exit**: auto-restarts Phase 1 with pivot context internal to /discovery (not a Task-invocation chain — same skill re-entry). No group exit; cascade does not advance.
 - **mid-flow**: resumable across chats and surfaces; re-invoke /discovery and the `discovery: state` Linear doc is the anchor.
 
 ## Notes

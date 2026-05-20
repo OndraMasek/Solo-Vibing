@@ -151,7 +151,7 @@ Reads cascade manifests and evaluates gates per D3.4. No external dependencies.
 # §2 Constants (manifest paths, halt codes, exit codes)
 # §3 Halt card data class + serializer
 # §4 Manifest loader (with provenance-chain verification)
-# §5 Predicate functions (one per gate, ~22 per D3.4)
+# §5 Predicate functions (one per gate, 28 per D3.4 — the AC-9 split (build.provenance / build.pyramid-tampering / build.test-execution / build.finalize) and AC-10 split (wrap.* four-gate) bring the count to 28 from the ~22 figure D3.4 carries in prose)
 # §6 Gate registry (dict: gate_name → predicate function)
 # §7 Per-stage dispatch (including the per-child fan-out at /verify)
 # §8 --explain content (inlined per D3.4; future: read gates.json)
@@ -159,7 +159,7 @@ Reads cascade manifests and evaluates gates per D3.4. No external dependencies.
 # ─────────────────────────────────────────────────────────
 ```
 
-Layer 1: **Predicate functions.** Pure functions: take manifest dict(s) and return `PredicateResult(passed: bool, halt: Optional[HaltCard], evidence: dict)`. One function per gate name in D3.4 (≈22 gates). Easily unit-testable in isolation.
+Layer 1: **Predicate functions.** Pure functions: take manifest dict(s) and return `PredicateResult(passed: bool, halt: Optional[HaltCard], evidence: dict)`. One function per gate name in D3.4 (28 gates — see Child D §2 inventory). Easily unit-testable in isolation.
 
 Layer 2: **Gate dispatch.** Given `(stage, gate_name, ticket)`, locates the right manifest file(s) under `.cascade/manifests/`, runs the appropriate predicate(s) in order (provenance check first per D3.4 §Per-stage gate inventories), aggregates results into a halt card if any predicate fails.
 
@@ -269,7 +269,7 @@ Explicitly deferred:
 5. **Versioned `pyramid_catalog_version`** for backward-compatible reading of older manifests. Manifest schema is frozen for v0.2; v0.2.x can introduce the version field if a schema change becomes necessary.
 6. **`/plan --drop-child` operation** and **`--reconcile` formalization.** Both are referenced by `solo-verify`'s exit code 3 routing (per D2.1 v2 / D3.4) but are not implemented as `solo-verify` subcommands. D4.5 (reconciliation primitives) covers `--reconcile`; `--drop-child` is named in D3.4 §Carry-forward as D4.x.
 
-All deferrals share a common rationale: the v0.2 floor (single-file Python script, no install step beyond Python presence, full predicate coverage of D3.4's 22 gates) is functional. Shipping advanced packaging or telemetry adds CI complexity without clear v0.2 user benefit.
+All deferrals share a common rationale: the v0.2 floor (single-file Python script, no install step beyond Python presence, full predicate coverage of D3.4's 28 gates — see Child D apply-time queue item #6) is functional. Shipping advanced packaging or telemetry adds CI complexity without clear v0.2 user benefit.
 
 ## Files this introduces in the framework repo
 
@@ -277,7 +277,7 @@ New files:
 
 - `tools/solo-verify` (single Python script, executable, ~1000 lines)
 - `tests/fixtures/manifests/passing/*.json` (synthetic passing manifests, one per stage at minimum)
-- `tests/fixtures/manifests/halting/<gate_name>/manifest.json` + `expected-halt.json` (one directory per gate in D3.4, ~22 directories)
+- `tests/fixtures/manifests/halting/<gate_name>/manifest.json` + `expected-halt.json` (one directory per gate in D3.4, 28 directories)
 - `tests/fixtures/manifests/chain-broken/*.json` (provenance break cases, ≥3 cases)
 - `tests/test_solo_verify.py` (unittest-based test runner, ~200–400 lines)
 - `.github/workflows/solo-verify-tests.yml` (CI workflow; conditional on D0.1 §Open items confirmation of GHA)
@@ -293,7 +293,7 @@ Updated files:
 - **`bootstrap.sh` Python detection on Windows.** v0.2 assumes Unix-like environments (macOS + Linux). Windows users need WSL or a Python.org installer. Document in framework `README.md`; do not engineer for native Windows in v0.2.
 - **GitHub Actions confirmed as the CI provider** (carried from D0.1 §Open items). The CI workflow file in this doc assumes GHA; revise if D0.1 settles on a different choice.
 - **`pyenv` / `asdf` / `mise` interaction.** If a consumer has multiple Python versions managed by pyenv/asdf/mise, the `#!/usr/bin/env python3` shebang picks whichever is shimmed first. Documented; not engineered around.
-- **Inlined `--explain` content size.** D3.4 has ~22 gates, each with ~5–15 lines of explanation. Inlined content totals ~200–400 lines. If this becomes unwieldy in the single-file structure, the v0.2.x `gates.json` externalization is the escape hatch.
+- **Inlined `--explain` content size.** D3.4 has 28 gates (the prose figure '~22' is superseded by the Child D inventory), each with ~5–15 lines of explanation. Inlined content totals ~200–400 lines. If this becomes unwieldy in the single-file structure, the v0.2.x `gates.json` externalization is the escape hatch.
 
 ## Cross-references
 

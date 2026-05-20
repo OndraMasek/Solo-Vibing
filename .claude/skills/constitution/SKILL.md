@@ -144,10 +144,21 @@ Per `completion-status.md`. v0.1 mappings:
 - `BLOCKED` — founder declined the proposed edit at the confirmation gate (no write performed); reseed declined; partial-failure on the same-turn batch (filesystem succeeded, Linear API down → marker file dropped per `write-discipline.md` §Partial failure with sync-retry hint).
 - `NEEDS_CONTEXT` — `docs/product/north-star.md` missing for seed/reseed mode; `docs/constitution.md` missing for amend mode; idea-brief missing for seed mode; ambiguous `<topic>` in amend mode without resolvable section target; Linear MCP unreachable for `doc`-counter scan per `counter-allocation.md`.
 
-## Chains
+## /Chains
 
-- **Seed mode** is Task-invoked by /discovery's approve exit per audit decision #9. /constitution is terminal (no further cascade) — sit-time on the v1.0.0 constitution is healthy.
-- **Amend / reseed / show**: terminal. No chain.
+**Pattern:** M (amendment-internal)
+**Group:** C
+**Within-group transitions:** per-amendment vote-equivalent cycle. Each amendment proposal → founder confirmation → constitution edit → cycle is a within-group transition (an advisory PreCompact safe boundary per D2.3 v1.3 §Within-group safe boundaries Group C row). Continuation is founder-driven: after each amendment's founder confirmation, this skill cycles back to "any further amendments proposed?" and proceeds when the founder confirms no more.
+**Group exit trigger:** constitution seal — founder confirms all proposed amendments resolved and the `/constitution` manifest at `.cascade/manifests/<marker>-constitution.json` has been written (sealing the post-amendment `docs/constitution.md` state).
+**Group exit render:** chat-end card per `docs/templates/chat-end-card.md`, variant `normal`. After render, set `cascade:run-state.last_completed_group = "C"`, write `cascade:run-state.last_completed_group_exit_manifest_path = ".cascade/manifests/<marker>-constitution.json"`, flush, write `.cascade/handoff/last.md`. Do not Task-invoke anything.
+**Next group entry:** D (`/specify`). The founder pastes the handoff prompt into a new chat.
+**Auto-fire compact handling:** not applicable. Group C runs in chat-Claude; no live PreCompact hook.
+**Group's exit manifest:** this skill's own manifest at `.cascade/manifests/<marker>-constitution.json`. The marker-scoped (not ticket-scoped) path reflects that the constitution governs all features within a marker, not a single feature.
+
+### v0.1 carry-forward
+
+- **Seed mode** was Task-invoked by /discovery's approve exit per audit decision #9; under v0.2 cascade, /discovery's Group B exit renders a chat-end card naming Group C as the next entry — the founder pastes the handoff prompt into a new chat to invoke /constitution. The two paths converge: v0.1's Task-invoke and v0.2's chat-end-card-driven re-entry both produce a /constitution seed run.
+- **Amend / reseed / show**: do not render the Group C exit card. Amend cycles back to "more amendments?"; reseed bumps MAJOR and re-enters within the same skill; show is read-only.
 
 ## Notes
 

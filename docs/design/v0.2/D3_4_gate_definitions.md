@@ -50,7 +50,7 @@ A gate has four properties:
 3. **Firing trigger** — pre-flight (before stage work), at-write (just before manifest seal), or post-seal (informational, after the manifest is written).
 4. **Halt card** — the §halt-message a failure surfaces. A single gate may surface one of several halt cards depending on which predicate failed (e.g., `spec.pyramid-shape` surfaces `§pyramid-shape-violation` or `§pyramid-tag-invalid`); D3.4 specifies the mapping.
 
-Gates are deterministic command hooks per D2.1 v2's "Deterministic command hooks default; agent hooks reserved for genuine LLM judgment" framing. The only agent-type hook in the cascade — the four-hat objection-coverage check on `SubagentStop` per the carry-forward thread — is encapsulated inside the `spec.four-hat-seal` gate at `/review`; D3.4 does not introduce additional agent-type hooks.
+Gates are deterministic command hooks per D2.1 v2's "Deterministic command hooks default; agent hooks reserved for genuine LLM judgment" framing. The cascade's single LLM-judgment-shaped predicate — the four-hat objection-coverage check on `SubagentStop` per the carry-forward thread — is realized as deterministic Python (`.claude/hooks/four-hat-objection-coverage.py`) per the Child 0001-C apply-time disposition (option (b) of `child_C_hooks_and_settings_authoring_notes.md` §Surfaced item #4). The predicate's *shape* is LLM-judgment (objection coverage across hats); the *realization* is a command-type hook that re-reads the four hat transcripts deterministically. D3.4 does not introduce additional LLM-judgment-shaped predicates; the four-hat check is the sole instance.
 
 ## Per-stage gate inventory
 
@@ -87,7 +87,7 @@ All gates evaluate before the halt card is composed; a `spec.ac-coverage` failur
 | `review.four-hat-objection-coverage` | at-write (SubagentStop hook) | Per-hat subagent transcripts each contain priming text + structured objections + concluding seal line; `unresolved_count == 0` after merge. (D2.1 v2 `/review` row.) | §four-hat-incomplete \| §four-hat-objections-unresolved |
 | `review.ac-list-seal` | at-write | `seal_sha256` recomputes against the spec's current AC list. | §four-hat-ac-list-drift |
 
-The single agent-type hook in the cascade lives inside `review.four-hat-objection-coverage`. Per D2.1 v2, the parent writes the subagent manifest from an independently re-read transcript; the gate's predicate is the parent's recompute, not the subagent's self-report.
+The cascade's single LLM-judgment-shaped predicate lives inside `review.four-hat-objection-coverage`. It is realized as a deterministic command-type Python hook on `SubagentStop` per Child 0001-C apply-time disposition (not an `agent`-type subagent spawn). Per D2.1 v2, the parent writes the subagent manifest from an independently re-read transcript; the gate's predicate is the parent's recompute, not the subagent's self-report.
 
 ### `/plan`
 

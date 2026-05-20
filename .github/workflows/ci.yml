@@ -1,0 +1,40 @@
+# GitHub Actions CI for Solo-Vibing
+#
+# Runs the v0.2 walking-skeleton checks: solo-verify --list-gates smoke + the
+# solo-verify unit/integration test suite. Free tier, public repo.
+#
+# Per spec AC-20 / SOL-HANDOFF-008 decision 2; D0.1 §CI workflow; D4.0 §CI workflow.
+#
+# Security note: this workflow uses no GitHub event payload data in run: steps,
+# so there is no command-injection surface from untrusted input.
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  solo-verify:
+    name: solo-verify smoke + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: solo-verify --list-gates (smoke)
+        run: |
+          chmod +x tools/solo-verify
+          python3 tools/solo-verify --list-gates
+
+      - name: solo-verify test suite
+        run: |
+          python3 -m unittest discover -s tests/solo-verify -v

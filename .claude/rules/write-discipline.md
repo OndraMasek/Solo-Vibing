@@ -35,3 +35,13 @@ If a write fails partway through a batch (file writes succeed, Linear API down, 
 3. Does not retry within the same skill turn.
 
 The retry path is always a separate user-invoked skill or command mode.
+
+## Denylist + reviewer-stance (no allow-list)
+
+Per `0001-v0.2-cascade-integration` AC-21 / SOL-HANDOFF-008 decision 3, write-discipline is **denylist-driven with a reviewer-stance soft-check** — explicitly not a hard allow-list. Two layers:
+
+**1. Hard halt — `PreToolUse` denylist.** Patterns at `.claude/agents/build-write-denylist.txt` (per D4.1 §D4.1.7) name cascade-control files that no build agent may write. The `pretool-write-denylist.sh` hook reads the file on every Write/Edit/MultiEdit invocation and halts `§cascade-control-write-blocked` on match. The denylist is itself denylisted — a build agent cannot grow its own write surface. Recovery: founder edits the file manually, outside the cascade.
+
+**2. Soft-check — reviewer-stance inside `/review`.** `/review` surfaces write-discipline findings as auditor-voice observations per `auditor-stance.md`: state the violation as fact (e.g. "the change writes to `docs/.solo-config.json` from /build context"), name the locus, and do not append LGTM closures. The soft-check does **not** block — it raises a `DONE_WITH_CONCERNS` if the surfaced write is ambiguous (e.g. legitimate cleanup that happens to touch a guarded path). The founder reads the finding and decides whether to address inline, file a v0.2.x issue, or override.
+
+Allow-list semantics — declaring upfront the exhaustive set of paths a skill may touch — are explicitly out. Skills produce artifacts whose paths are spec-determined; an allow-list would freeze that surface at design-time and force allow-list amendments for every legitimate spec evolution. Denylist + reviewer-stance leaves the surface open and protects only what is provably load-bearing.

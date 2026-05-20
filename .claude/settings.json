@@ -1,0 +1,110 @@
+{
+  "comment": "Solo-Vibing v0.2 hook wiring. See docs/specs/0001-v0.2-cascade-integration/ for binding design docs. Edit via the cascade's update-linear / wrap surface, not by hand. $schema field intentionally omitted pending canonical URL publication by Anthropic (Child C apply-time queue item #10; v0.2.x adds the field once the URL is confirmed).",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "comment": "Pre-flight chain-integrity check for cascade slash-commands. Script narrows to /review|/plan|/update-linear|/build|/wrap|/verify|/retro internally; no matcher field is supported on UserPromptSubmit (per D2.2 §Hook events table).",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/preflight-provenance.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "comment": "Pyramid-tampering guard for spec-file writes. Script narrows by file_path to docs/specs/*/spec.md.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pyramid-tampering.sh",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "comment": "Cascade-control write denylist guard per spec AC-21 / D4.1 §D4.1.7. Reads patterns from .claude/agents/build-write-denylist.txt; halts on match with §cascade-control-write-blocked.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pretool-write-denylist.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "comment": "Reserved for v0.1 mirror-sha predicate carry-forward (Linear-write tools). v0.2 does not add new PostToolUse hooks; the carry-forward predicate is wired by the v0.1 codebase. This empty array is the placeholder that test_settings_json_wires_all_events asserts.",
+        "hooks": []
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "four-hat-user|four-hat-engineer|four-hat-pm|four-hat-skeptic",
+        "comment": "The cascade's single agent-judgment-shaped hook per D3.4 §What is a gate. Realized as command-type Python (per surfaced item in four-hat-objection-coverage-hook.md). Output: top-level-fields-only Stop/SubagentStop quirk per D2.2.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/four-hat-objection-coverage.py",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact|clear",
+        "comment": "Cross-session state restoration. Source-matched dispatch inside the script (startup vs resume vs compact vs clear branches).",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start-state-restore.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "comment": "Three-band threshold + safe-boundary check per D2.2 §Compact mechanics. Handles both trigger=manual and trigger=auto (no matcher needed; script reads trigger from payload).",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/precompact-safe-boundary.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "comment": "The cascade's single Stop-hook orchestrator per D2.2 §Research-step resolution #3. Dispatches kill_in_progress, manual_halt, and per-skill completion predicates. Stop has no matchers (D2.2 §Hook events table).",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/stop-orchestrator.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "comment": "Per-session telemetry sink. Async fire-and-forget per D2.2 §Critical caveats #4. Appends one JSONL line per session to .cascade/telemetry/sessions.jsonl.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-end-telemetry.sh",
+            "async": true,
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
