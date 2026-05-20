@@ -1,0 +1,27 @@
+# =================================================================
+# Phase 3 / v0.2 cascade-integration additions
+#
+# This block appends to the existing v0.1 .gitignore in-place.
+# The executing Claude Code session reads v0.1 .gitignore first,
+# then appends only the patterns below that are not already present.
+# Per parent spec docs/specs/0001-v0.2-cascade-integration/spec.md AC-5.
+# =================================================================
+
+# Refactor-spike invariance predicate: pass-set captured at /verify time
+# regenerates on every run; only pass-set-at-seal.txt is committed.
+# Per D3.3 §Refactor-spike invariance predicate. Required for AC-5.
+docs/specs/*/invariance/pass-set-at-verify.txt
+
+# Atomicity-write half-files for chat-end card handoff. The write protocol
+# writes to *.tmp then atomically renames to last.md; if a chat is closed
+# between write and rename, the .tmp file is orphaned. Per D2.3 v1.3
+# §Group-exit mechanics atomicity steps 3–5.
+.cascade/handoff/*.tmp
+
+# Per-resource lock sentinels (transient; created via O_CREAT|O_EXCL during
+# write, removed on completion). Per D2.1 v2 §Per-resource lock semantics.
+# NOTE: lock-directory path depends on Child 0001-A's resolution of the
+# .solo-locks/ (root, per decomposition.md) vs docs/.solo-locks/ (per
+# D2.1 v2.1) discrepancy. If the resolution is root, the line below stands;
+# if docs/, change to "docs/.solo-locks/*.lock". See authoring notes.
+.solo-locks/*.lock

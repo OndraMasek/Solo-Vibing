@@ -1,0 +1,24 @@
+{
+  "_format": "This is docs/.solo-config.example.json — illustrative only. The framework reads docs/.solo-config.json, not this file. Copy whichever pass_set_capture_command matches your test runner into docs/.solo-config.json's invariance.pass_set_capture_command field. Per D3.3 §Refactor-spike invariance predicate.",
+  "_caveat": "The pass_set_capture_command must produce one stable test ID per line on stdout and exit zero. Verify the chosen command on your runner before sealing a refactor-spike spec — a malformed command halts §invariance-config-missing at /verify time. Production-quality runner-agnostic variants using structured output (--json-report for pytest, --json for jest, --format json for cargo) are documented in D3.3 §Runner-agnostic capture mechanism; recommended for refactor-spike specs that ship to other consumers.",
+  "_examples_per_runner": {
+    "_pytest_comment": "Python; assumes default pytest output. Caveat: pytest -q does not always emit per-test PASSED lines. The D3.3 §Runner-agnostic capture mechanism alternative uses pytest-json-report with --json-report-file=/dev/stdout.",
+    "pytest": "pytest -q --tb=no | grep PASSED | sort",
+    "_vitest_comment": "Node/TypeScript; requires jq and pnpm.",
+    "vitest": "pnpm vitest run --reporter=json | jq -r '.testResults[].assertionResults[] | select(.status==\"passed\") | .fullName' | sort",
+    "_jest_comment": "Node/JavaScript; illustrative — verify command produces one passing-test ID per line. D3.3 §Runner-agnostic capture mechanism alternative uses jest --json --silent piped through jq.",
+    "jest": "jest --listTests --testPathPattern=passed | sort",
+    "_go_test_comment": "Go; standard library test runner. Produces lines like '--- PASS: TestName (0.00s)' as test IDs.",
+    "go_test": "go test -v ./... 2>&1 | grep -E '^--- PASS' | sort",
+    "_cargo_test_comment": "Rust; illustrative — verify command produces one passing-test ID per line. D3.3 §Runner-agnostic capture mechanism alternative uses cargo test -- -Z unstable-options --format json piped through jq.",
+    "cargo_test": "cargo test --quiet 2>&1 | grep 'test result' | sort"
+  },
+  "_target_config_shape": "After choosing one of the above runner examples, your docs/.solo-config.json should contain (at least) the following blocks alongside whatever marker / cascade / workflow keys it already carries:",
+  "invariance": {
+    "pass_set_capture_command": "pytest --json-report --json-report-file=/dev/stdout --quiet 2>/dev/null | jq -r '.tests[] | select(.outcome == \"passed\") | .nodeid'"
+  },
+  "workflow": {
+    "_default_strategy_comment": "Optional. Empty string means no product-level default; /specify step 1 falls back to first-principles proposal. Set to one of: walking-skeleton, api-boundary, capability-cluster, refactor-spike, hybrid. Behavioral wiring deferred to Child 0001-B per parent spec Open Question 4 — this slot ships in v0.2 but /onboard does not yet write it and /specify does not yet read it.",
+    "default_strategy": ""
+  }
+}

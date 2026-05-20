@@ -1,0 +1,45 @@
+/onboard:
+  onboard.linear-projects  [at-write]
+  onboard.config-write  [at-write]
+
+/specify:
+  spec.provenance  [pre-flight]
+  spec.ac-coverage  [at-seal]
+  spec.pyramid-shape  [at-seal]
+  spec.strategy-evidence  [at-seal]
+  spec.strategy-annotation  [at-seal]
+
+/review:
+  review.provenance  [pre-flight]
+  review.four-hat-objection-coverage  [at-write]
+  review.ac-list-seal  [at-write]
+
+/plan:
+  plan.provenance  [pre-flight]
+  plan.decomposition-shape  [at-write]
+  plan.child-inheritance  [at-write]
+
+/update-linear:
+  update-linear.diff-applied  [at-write]
+
+/build:
+  build.provenance  [pre-flight]
+  build.pyramid-tampering  [pre-flight]
+  build.test-execution  [per-iteration]
+  build.finalize  [at-write]
+
+/wrap:
+  wrap.provenance  [pre-flight]
+  wrap.tests-green  [at-write]
+  wrap.mirror-sha-match  [at-write]
+  wrap.linear-state-updated  [at-write]
+
+/verify:
+  verify.provenance  [pre-flight]
+  verify.child-completion  [pre-flight]
+  verify.perceptual-evidence  [per-child]
+  verify.invariance  [per-child]
+  verify.milestone-aggregation  [at-write]
+
+/retro:
+  retro.doc-sealed  [at-write]

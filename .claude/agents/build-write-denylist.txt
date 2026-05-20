@@ -1,0 +1,34 @@
+# Cascade-control write denylist
+#
+# Patterns matched against the target file path of every Write/Edit/MultiEdit
+# tool call by the `pretool-write-denylist.sh` PreToolUse hook. Any match halts
+# the call with `§cascade-control-write-blocked`. Recovery: the founder edits
+# the file manually outside the cascade, or the responsible skill re-runs with
+# the proper authority.
+#
+# Patterns: glob-style (* matches any character including /). One pattern per
+# non-blank, non-comment line. `#` starts a comment.
+#
+# Provenance: D4.1 §D4.1.7 — Ralph mutated its own governance. The cascade
+# protects this list from being edited by build agents themselves.
+# Per spec AC-21 / SOL-HANDOFF-008 decision 3 (denylist + reviewer-stance,
+# not allow-list).
+
+# Cascade-internal config and rules
+docs/.solo-config.json
+docs/.solo-config.example.json
+docs/templates/.solo-config.json.template
+docs/templates/.solo-config.example.json
+.claude/rules/*.md
+.claude/agents/build-write-denylist.txt
+
+# Halt-card template (the cascade's audit-voice surface — only /retro or
+# explicit founder amendment may touch)
+docs/templates/halt-messages.md
+
+# Cascade run-state and manifest store
+.cascade/run-state.json
+.cascade/manifests/*
+
+# Per-resource write locks
+.solo-locks/*

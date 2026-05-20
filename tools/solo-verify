@@ -1,0 +1,2965 @@
+#!/usr/bin/env python3
+"""solo-verify — gate evaluator for the Solo Claude Stack cascade.
+
+Reads cascade manifests and evaluates gates per D3.4. No external dependencies.
+
+This is the standalone CLI parity surface for every gate's hook-side predicate.
+Hooks call it on the auto-fire path; the founder calls it on the resume path;
+tests call it on the smoke path. The same arg-shape and exit codes apply across
+all three contexts.
+
+The CLI surface (D3.4 §`solo-verify` CLI surface + spec AC-15):
+
+  solo-verify onboard <product>          # onboard.* gates
+  solo-verify specify <ticket>           # spec.* gates
+  solo-verify review  <ticket>           # review.* gates
+  solo-verify plan    <ticket>           # plan.* gates
+  solo-verify update-linear <ticket>     # update-linear.* gates
+  solo-verify build   <ticket>           # build.* gates (pre-flight + finalize)
+  solo-verify wrap    <ticket>           # wrap.* gates
+  solo-verify verify  <milestone>        # verify.* gates incl. per-child dispatch
+  solo-verify retro   <milestone>        # retro.* gates
+
+Hook-invocation aliases (D2.2 §Hook/script table):
+  solo-verify subagent <agent_id>        # SubagentStop on four-hat agents
+  solo-verify build-spawn   <ticket>     # PostToolUse on Ralph spawn
+  solo-verify build-finalize <ticket>    # Stop on /build orchestrator
+  solo-verify milestone <id>             # alias for `verify` from /verify hook
+
+Flags:
+  <stage> <ticket> --gate <gate-name>    # single-gate evaluation
+  <stage> <ticket> --reconcile [--yes]   # re-derive expected state, repair drift
+                                         # (F-Rev-2 carry-forward — also onboard/
+                                         # update-linear/review/verify/retro)
+  --list-gates [stage]                   # all gates or per-stage subset
+  --explain <stage>.<gate-name>          # predicate text, halts, recovery
+
+Exit codes (D3.4):
+  0  All gates evaluated, all passed.
+  1  One or more gates halted (standard halt).
+  2  Stage / gate unknown; Python version too old; usage error.
+  3  Manifest chain broken (provenance halt). Triggers `--reconcile` routing.
+  4  Filesystem / Linear inconsistency that prevents evaluation
+     (e.g. .cascade/manifests/ missing entirely).
+
+Authored against D3.4 (gates), D2.1 v2 + v2.1 (trust model, run-state path),
+D3.1 (decomposition strategies), D3.2 (pyramid shapes), D3.3 (perceptual /
+invariance predicates), D4.0 (build & distribution), D4.5 (reconciliation
+primitives).
+"""
+
+# ═════════════════════════════════════════════════════════════════════════════
+# §1  Imports + Python version gate
+# ═════════════════════════════════════════════════════════════════════════════
+
+import sys
+
+if sys.version_info < (3, 10):
+    sys.stderr.write(
+        "solo-verify requires Python 3.10 or newer (found {}). "
+        "Install Python 3.10+ from python.org or via your package manager.\n"
+        .format(".".join(map(str, sys.version_info[:3])))
+    )
+    sys.exit(2)
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Iterable
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# §2  Constants — paths, halt codes, exit codes
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Canonical paths per D2.1 v2.1 + D2.2 §`.cascade/` namespace.
+CASCADE_DIR             = ".cascade"
+CASCADE_MANIFESTS_DIR   = ".cascade/manifests"
+CASCADE_HALT_DIR        = ".cascade/halt"
+CASCADE_SESSION_DIR     = ".cascade/session"
+CASCADE_TELEMETRY_DIR   = ".cascade/telemetry"
+RUN_STATE_PATH          = ".cascade/run-state.json"
+SOLO_CONFIG_PATH        = "docs/.solo-config.json"
+SOLO_LOCKS_DIR          = "docs/.solo-locks"
+HALT_MESSAGES_TEMPLATE  = "docs/templates/halt-messages.md"
+
+# Project-dir resolution: CLAUDE_PROJECT_DIR (set by Claude Code hook surface)
+# wins; cwd is the fallback.
+PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())).resolve()
+
+# Exit codes per D3.4 §Exit codes.
+EXIT_PASS              = 0
+EXIT_HALT              = 1
+EXIT_USAGE             = 2
+EXIT_PROVENANCE        = 3
+EXIT_FS_INCONSISTENT   = 4
+
+# Canonical decomposition strategies per D3.1.
+STRATEGIES = {
+    "walking-skeleton",
+    "api-boundary",
+    "capability-cluster",
+    "refactor-spike",
+    "hybrid",
+}
+
+# Per-strategy pyramid catalog per D3.2.
+PYRAMID_CATALOG: dict[str, dict[str, list[str]] | None] = {
+    "walking-skeleton": {
+        "required":  ["smoke", "perceptual"],
+        "optional":  ["unit", "integration"],
+        "forbidden": ["contract", "invariance"],
+    },
+    "api-boundary": {
+        "required":  ["contract", "perceptual"],
+        "optional":  ["unit", "integration"],
+        "forbidden": ["smoke", "invariance"],
+    },
+    "capability-cluster": {
+        "required":  ["integration", "perceptual"],
+        "optional":  ["unit"],
+        "forbidden": ["smoke", "contract", "invariance"],
+    },
+    "refactor-spike": {
+        "required":  ["invariance"],
+        "optional":  [],
+        "forbidden": ["unit", "integration", "contract", "smoke", "perceptual"],
+    },
+    "hybrid": None,
+}
+
+TAG_ENUM = {"unit", "integration", "contract", "smoke", "perceptual", "invariance"}
+
+# Capability-cluster artifact-type → file extension map per D3.3.
+CAPABILITY_ARTIFACT_TYPES = {
+    "rendered-document": ".pdf",
+    "image":             ".png",
+    "scheduled-event":   ".ics",
+    "share-post":        ".md",
+    "email":             ".eml",  # also accepted: ".md"
+    "api-response":      ".json",
+    "plain-text":        ".txt",
+}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# §3  Data classes — PredicateResult, HaltCard, GateResult, GateSpec
+# ═════════════════════════════════════════════════════════════════════════════
+
+@dataclass(frozen=True)
+class HaltCard:
+    """Canonical halt-card shape per D3.4 §Multi-failure aggregation."""
+    code: str                                  # "§provenance-chain-broken"
+    summary: str                               # one-line problem statement
+    recommendation: str = ""                   # multi-line OK
+    diagnostic_context: dict[str, Any] = field(default_factory=dict)
+    sub_case: str | None = None                # "missing-required", etc.
+    exit_code: int = EXIT_HALT                 # overrideable for §provenance-* (→3)
+
+    @property
+    def full_code(self) -> str:
+        return f"{self.code}/{self.sub_case}" if self.sub_case else self.code
+
+
+@dataclass
+class PredicateResult:
+    """Result of evaluating one predicate within a gate."""
+    passed: bool
+    halt: HaltCard | None = None
+    evidence: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class GateResult:
+    """Aggregated result of evaluating all predicates in one gate."""
+    gate_name: str          # "spec.pyramid-shape"
+    stage: str              # "specify"
+    trigger: str            # "at-seal" / "pre-flight" / "at-write" / "per-iteration"
+    passed: bool
+    halts: list[HaltCard] = field(default_factory=list)
+    evidence: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class StageResult:
+    """Aggregated result of evaluating all gates at one stage."""
+    stage: str
+    ticket: str
+    gates: list[GateResult] = field(default_factory=list)
+
+    @property
+    def passed(self) -> bool:
+        return all(g.passed for g in self.gates)
+
+    @property
+    def halts(self) -> list[HaltCard]:
+        out: list[HaltCard] = []
+        for g in self.gates:
+            out.extend(g.halts)
+        return out
+
+    @property
+    def exit_code(self) -> int:
+        # Provenance / chain-broken halts route to exit 3 (triggers --reconcile
+        # per D2.1 v2 / D4.5).
+        if self.passed:
+            return EXIT_PASS
+        for h in self.halts:
+            if h.exit_code == EXIT_PROVENANCE:
+                return EXIT_PROVENANCE
+            if h.code in {"§provenance-chain-broken", "§ac-list-drift",
+                          "§four-hat-seal-broken"}:
+                return EXIT_PROVENANCE
+        return EXIT_HALT
+
+
+@dataclass(frozen=True)
+class GateSpec:
+    """Declarative spec for one gate. Drives --list-gates, --explain, dispatch."""
+    name: str                                  # "spec.pyramid-shape"
+    stage: str                                 # "specify"
+    trigger: str                               # "pre-flight" / "at-seal" / ...
+    predicate_set: str                         # human-readable description
+    halt_codes: list[str]                      # which halts this gate can emit
+    recovery: str                              # text for --explain Recovery: line
+    # The actual evaluator — fn(manifest_chain, ticket, project_dir) -> GateResult
+    evaluator: Callable[..., GateResult] = field(repr=False, default=None)  # type: ignore
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# §4  Manifest IO helpers
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _sha256_string(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _sha256_manifest_self_zeroed(path: Path) -> str:
+    """Recompute manifest sha with `manifest_sha256` field zeroed.
+
+    Implements D2.1 v2 §Caller-side verification step 3.
+    """
+    raw = path.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    data["manifest_sha256"] = ""
+    canonical = json.dumps(data, sort_keys=True, separators=(",", ":"))
+    return _sha256_string(canonical)
+
+
+def _ac_list_sha256_from_spec(spec_path: Path) -> str:
+    """Extract bulleted AC list from a spec markdown and hash it.
+
+    Per D2.1 v2 §input_provenance.ac_list_sha256: parse the
+    `## Acceptance Criteria` section, take all top-level bulleted lines,
+    strip leading bullet markers and whitespace, normalize line endings
+    to `\\n`, concatenate, sha256.
+    """
+    text = spec_path.read_text(encoding="utf-8")
+    in_ac = False
+    bullets: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        # Match `## Acceptance criteria` (case-insensitive) or `## Acceptance Criteria`
+        if re.match(r"^#{1,3}\s+acceptance\s+criteria\s*$", stripped, re.IGNORECASE):
+            in_ac = True
+            continue
+        if in_ac and stripped.startswith("#"):  # next heading ends the AC section
+            break
+        if in_ac:
+            m = re.match(r"^\s*[-*+]\s+(.+)$", line)
+            if m:
+                bullets.append(m.group(1).strip())
+    if not bullets:
+        return _sha256_string("")
+    return _sha256_string("\n".join(bullets))
+
+
+def _resolve(path_str: str | Path) -> Path:
+    """Resolve a possibly-relative path against PROJECT_DIR."""
+    p = Path(path_str)
+    if p.is_absolute():
+        return p
+    return PROJECT_DIR / p
+
+
+def _read_json_or_none(path: Path) -> dict[str, Any] | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _read_run_state() -> dict[str, Any] | None:
+    """Read .cascade/run-state.json at the canonical path per D2.1 v2.1."""
+    return _read_json_or_none(_resolve(RUN_STATE_PATH))
+
+
+def _read_manifest(ticket: str, stage: str) -> dict[str, Any] | None:
+    """Read .cascade/manifests/<ticket>-<stage>.json."""
+    p = _resolve(CASCADE_MANIFESTS_DIR) / f"{ticket}-{stage}.json"
+    return _read_json_or_none(p)
+
+
+def _manifest_path(ticket: str, stage: str) -> Path:
+    return _resolve(CASCADE_MANIFESTS_DIR) / f"{ticket}-{stage}.json"
+
+
+def _cascade_fs_ready() -> tuple[bool, str]:
+    """Confirm .cascade/manifests/ exists. Returns (ok, reason)."""
+    p = _resolve(CASCADE_MANIFESTS_DIR)
+    if not p.is_dir():
+        return False, f"{CASCADE_MANIFESTS_DIR}/ is absent at {p}"
+    return True, ""
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# §5  Predicate helpers — provenance chain check
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _verify_chain_to_parent(
+    ticket: str,
+    expected_parent_stage_choices: set[str] | None = None,
+) -> tuple[bool, HaltCard | None, dict[str, Any] | None]:
+    """Verify the manifest chain to the upstream parent stage.
+
+    Implements D2.1 v2 §Caller-side verification protocol steps 1–5 plus a
+    soft step-3 check that the parent's `outputs.stage` (if present) is in
+    `expected_parent_stage_choices` (when caller cares).
+
+    Returns:
+      (passed, halt_card | None, parent_manifest_dict | None)
+    """
+    run_state = _read_run_state()
+    if run_state is None:
+        return False, HaltCard(
+            code="§provenance-chain-broken",
+            summary=f"cascade run-state at {RUN_STATE_PATH} is absent or unparseable",
+            recommendation=(
+                "If this is a fresh repo, run /onboard. Otherwise, run "
+                "`solo-cascade resume` per D4.6 v1.1 to re-derive run-state."
+            ),
+            diagnostic_context={
+                "run_state_path": str(_resolve(RUN_STATE_PATH)),
+                "ticket": ticket,
+            },
+            exit_code=EXIT_PROVENANCE,
+        ), None
+
+    last = run_state.get("last_completed_stage") or {}
+    expected_path = last.get("postcondition_manifest_path")
+    expected_sha  = last.get("postcondition_manifest_sha256")
+
+    if not expected_path:
+        return False, HaltCard(
+            code="§provenance-chain-broken",
+            summary="cascade run-state names no last_completed_stage manifest",
+            recommendation=(
+                "The cascade may be at /onboard's terminal (no work in progress); "
+                "/specify is the typical entry point for a new feature."
+            ),
+            diagnostic_context={"ticket": ticket, "run_state_keys": sorted(run_state.keys())},
+            exit_code=EXIT_PROVENANCE,
+        ), None
+
+    parent_path = _resolve(expected_path)
+    if not parent_path.is_file():
+        return False, HaltCard(
+            code="§provenance-chain-broken",
+            summary=f"expected upstream manifest at {expected_path} is absent",
+            recommendation=(
+                "--reconcile per D2.1 v2.1's chain-recovery pattern, OR "
+                "--rerun=<stage> per D4.5 for absent-manifest cases."
+            ),
+            diagnostic_context={
+                "expected_path": expected_path,
+                "absolute_path": str(parent_path),
+                "ticket": ticket,
+            },
+            exit_code=EXIT_PROVENANCE,
+        ), None
+
+    recomputed = _sha256_manifest_self_zeroed(parent_path)
+    if expected_sha and recomputed != expected_sha:
+        return False, HaltCard(
+            code="§provenance-chain-broken",
+            summary=(
+                f"parent manifest sha mismatch at {expected_path}: "
+                f"expected {expected_sha[:12]}..., got {recomputed[:12]}..."
+            ),
+            recommendation="--reconcile per D2.1 v2.1's chain-recovery pattern.",
+            diagnostic_context={
+                "expected_path": expected_path,
+                "expected_sha": expected_sha,
+                "recomputed_sha": recomputed,
+                "ticket": ticket,
+            },
+            exit_code=EXIT_PROVENANCE,
+        ), None
+
+    parent_manifest = _read_json_or_none(parent_path)
+    if parent_manifest is None:
+        return False, HaltCard(
+            code="§provenance-chain-broken",
+            summary=f"parent manifest at {expected_path} is unparseable JSON",
+            recommendation="--reconcile per D2.1 v2.1's chain-recovery pattern.",
+            diagnostic_context={"expected_path": expected_path, "ticket": ticket},
+            exit_code=EXIT_PROVENANCE,
+        ), None
+
+    if expected_parent_stage_choices is not None:
+        parent_stage = parent_manifest.get("stage", "").lstrip("/")
+        # Accept both leading-slash and no-slash forms.
+        if parent_stage and parent_stage not in expected_parent_stage_choices:
+            return False, HaltCard(
+                code="§provenance-chain-broken",
+                summary=(
+                    f"upstream stage is '{parent_stage}'; expected one of "
+                    f"{sorted(expected_parent_stage_choices)}"
+                ),
+                recommendation="--reconcile per D2.1 v2.1's chain-recovery pattern.",
+                diagnostic_context={
+                    "expected_path": expected_path,
+                    "actual_stage": parent_stage,
+                    "expected_stages": sorted(expected_parent_stage_choices),
+                    "ticket": ticket,
+                },
+                exit_code=EXIT_PROVENANCE,
+            ), parent_manifest
+
+    return True, None, parent_manifest
+
+
+def _verify_ac_list_chain(
+    parent_manifest: dict[str, Any], ticket: str,
+) -> tuple[bool, HaltCard | None]:
+    """Verify that the spec's current AC-list-sha256 matches the parent
+    manifest's recorded ac_list_sha256.
+
+    Implements D2.1 v2 §AC-hash chain.
+    """
+    outputs = parent_manifest.get("outputs", {}) or {}
+    spec_path_rel = outputs.get("spec_path") or (
+        parent_manifest.get("input_provenance", {}) or {}
+    ).get("spec_path")
+    sealed_ac_sha = outputs.get("ac_list_sha256") or (
+        parent_manifest.get("input_provenance", {}) or {}
+    ).get("ac_list_sha256")
+    if not spec_path_rel or not sealed_ac_sha:
+        # No AC chain to check (e.g. /onboard manifest carries no spec).
+        return True, None
+    spec_path = _resolve(spec_path_rel)
+    if not spec_path.is_file():
+        return False, HaltCard(
+            code="§ac-list-drift",
+            summary=f"spec at {spec_path_rel} is absent; AC-list chain cannot verify",
+            recommendation=(
+                "If the spec was deleted, restore from VCS; otherwise re-run "
+                "/specify --unseal to re-seal against the current spec."
+            ),
+            diagnostic_context={
+                "spec_path": spec_path_rel,
+                "sealed_ac_sha": sealed_ac_sha,
+                "ticket": ticket,
+            },
+            exit_code=EXIT_PROVENANCE,
+        )
+    current = _ac_list_sha256_from_spec(spec_path)
+    if current != sealed_ac_sha:
+        return False, HaltCard(
+            code="§ac-list-drift",
+            summary=(
+                f"AC list at {spec_path_rel} has changed since upstream sealed: "
+                f"sealed {sealed_ac_sha[:12]}..., current {current[:12]}..."
+            ),
+            recommendation=(
+                "Re-run /specify <ticket> --unseal to re-seal against the current "
+                "AC list, then re-fire the cascade from the unseal point."
+            ),
+            diagnostic_context={
+                "spec_path": spec_path_rel,
+                "sealed_sha": sealed_ac_sha,
+                "current_sha": current,
+                "ticket": ticket,
+            },
+            exit_code=EXIT_PROVENANCE,
+        )
+    return True, None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# §5b  Predicate helpers — pyramid shape / strategy-evidence
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _check_pyramid_shape(
+    manifest_outputs: dict[str, Any], ticket: str,
+) -> list[HaltCard]:
+    """Evaluate D3.2 predicates 1–7 against a /specify manifest's outputs.
+
+    Returns the list of halt cards (empty list ≡ all passed).
+    """
+    halts: list[HaltCard] = []
+    strategy = manifest_outputs.get("decomposition_strategy")
+    pyramid  = manifest_outputs.get("pyramid_shape")
+    seed     = manifest_outputs.get("failing_test_seed", []) or []
+    seed_tags = {entry.get("tag") for entry in seed if isinstance(entry, dict)}
+
+    # Predicate 7: hybrid → null shape AND empty seed
+    if strategy == "hybrid":
+        if pyramid is not None or len(seed) > 0:
+            halts.append(HaltCard(
+                code="§pyramid-shape-violation",
+                sub_case="hybrid-nonempty",
+                summary=(
+                    "hybrid parent must defer pyramid shape and tests to children; "
+                    "pyramid_shape must be null and failing_test_seed[] must be empty"
+                ),
+                recommendation=(
+                    "/specify <ticket> --continue and remove parent-level pyramid_shape "
+                    "and failing_test_seed[] entries; let /plan's decomposer carry the "
+                    "per-child structure."
+                ),
+                diagnostic_context={
+                    "strategy": strategy,
+                    "pyramid_shape_is_null": pyramid is None,
+                    "seed_length": len(seed),
+                    "ticket": ticket,
+                },
+            ))
+        return halts
+
+    if strategy not in STRATEGIES:
+        halts.append(HaltCard(
+            code="§strategy-missing",
+            summary=f"decomposition_strategy='{strategy}' is not in the canonical enum",
+            recommendation=(
+                "/specify <ticket> --continue and resolve the §Decomposition strategy "
+                f"section to one of {sorted(STRATEGIES)}."
+            ),
+            diagnostic_context={
+                "actual_strategy": strategy,
+                "canonical_enum": sorted(STRATEGIES),
+                "ticket": ticket,
+            },
+        ))
+        return halts
+
+    catalog = PYRAMID_CATALOG[strategy]
+
+    # Predicate 1: pyramid_shape.strategy == decomposition_strategy
+    if pyramid is None or pyramid.get("strategy") != strategy:
+        halts.append(HaltCard(
+            code="§pyramid-shape-violation",
+            sub_case="strategy-mismatch",
+            summary=(
+                f"pyramid_shape.strategy='{pyramid.get('strategy') if pyramid else None}'"
+                f" but decomposition_strategy='{strategy}'"
+            ),
+            recommendation="/specify <ticket> --continue and re-derive pyramid_shape from the strategy.",
+            diagnostic_context={
+                "pyramid_shape": pyramid,
+                "decomposition_strategy": strategy,
+                "ticket": ticket,
+            },
+        ))
+        # Don't gate further checks on this; continue evaluating.
+
+    # Predicate 2: shape content matches the catalog (set-equality)
+    if catalog and pyramid:
+        for key, want in (("required_tags", catalog["required"]),
+                          ("optional_tags", catalog["optional"]),
+                          ("forbidden_tags", catalog["forbidden"])):
+            got = pyramid.get(key, []) or []
+            if set(got) != set(want):
+                halts.append(HaltCard(
+                    code="§pyramid-shape-violation",
+                    sub_case="shape-tampering",
+                    summary=f"pyramid_shape.{key} mismatch vs catalog for strategy='{strategy}'",
+                    recommendation="/specify <ticket> --continue and re-derive pyramid_shape from the catalog.",
+                    diagnostic_context={
+                        "field": key,
+                        "expected": sorted(want),
+                        "actual": sorted(got),
+                        "strategy": strategy,
+                        "ticket": ticket,
+                    },
+                ))
+
+    # Predicate 6: refactor-spike → empty seed
+    if strategy == "refactor-spike":
+        if len(seed) > 0:
+            halts.append(HaltCard(
+                code="§pyramid-shape-violation",
+                sub_case="refactor-spike-nonempty",
+                summary="refactor-spike must have an empty failing-test seed",
+                recommendation=(
+                    "/specify <ticket> --continue and remove the seed entries. "
+                    "Invariance is a /verify-time predicate, not an authored test."
+                ),
+                diagnostic_context={
+                    "strategy": strategy,
+                    "seed_length": len(seed),
+                    "seed_names": [e.get("name") for e in seed if isinstance(e, dict)],
+                    "ticket": ticket,
+                },
+            ))
+        return halts
+
+    # Predicates 3 + 4: required present / forbidden absent (for the three
+    # non-refactor-spike, non-hybrid strategies).
+    if catalog:
+        missing = set(catalog["required"]) - seed_tags
+        if missing:
+            halts.append(HaltCard(
+                code="§pyramid-shape-violation",
+                sub_case="missing-required",
+                summary=(
+                    f"pyramid_shape requires {sorted(catalog['required'])}; "
+                    f"missing from seed: {sorted(missing)}"
+                ),
+                recommendation=(
+                    "/specify <ticket> --continue and add tests tagged with the "
+                    "missing required tags."
+                ),
+                diagnostic_context={
+                    "strategy": strategy,
+                    "required": sorted(catalog["required"]),
+                    "missing": sorted(missing),
+                    "seed_tags": sorted({t for t in seed_tags if t}),
+                    "ticket": ticket,
+                },
+            ))
+        forbidden_present = seed_tags & set(catalog["forbidden"])
+        if forbidden_present:
+            halts.append(HaltCard(
+                code="§pyramid-shape-violation",
+                sub_case="forbidden-present",
+                summary=(
+                    f"forbidden tags present in seed: {sorted(forbidden_present)}; "
+                    f"pyramid_shape forbids {sorted(catalog['forbidden'])} for {strategy}"
+                ),
+                recommendation=(
+                    "/specify <ticket> --continue and retag or remove the offending entries."
+                ),
+                diagnostic_context={
+                    "strategy": strategy,
+                    "forbidden": sorted(catalog["forbidden"]),
+                    "present": sorted(forbidden_present),
+                    "ticket": ticket,
+                },
+            ))
+
+    # Predicate 5: every entry tag is in-enum
+    for entry in seed:
+        if not isinstance(entry, dict):
+            continue
+        tag = entry.get("tag")
+        if tag is not None and tag not in TAG_ENUM:
+            halts.append(HaltCard(
+                code="§pyramid-tag-invalid",
+                summary=f"test '{entry.get('name')}' has tag '[{tag}]'; not in canonical enum",
+                recommendation="/specify <ticket> --continue and retag to one of the canonical six.",
+                diagnostic_context={
+                    "test_name": entry.get("name"),
+                    "invalid_tag": tag,
+                    "canonical_enum": sorted(TAG_ENUM),
+                    "ticket": ticket,
+                },
+            ))
+
+    return halts
+
+
+def _check_ac_coverage(
+    manifest_outputs: dict[str, Any], ticket: str,
+) -> list[HaltCard]:
+    """Verify every AC in `acceptance_criteria` has at least one named test in
+    `failing_test_seed[]`. Skipped for refactor-spike and hybrid parents.
+    """
+    strategy = manifest_outputs.get("decomposition_strategy")
+    if strategy in {"refactor-spike", "hybrid"}:
+        return []
+    acs = manifest_outputs.get("acceptance_criteria", []) or []
+    seed = manifest_outputs.get("failing_test_seed", []) or []
+    covered: set[str] = set()
+    for entry in seed:
+        if not isinstance(entry, dict):
+            continue
+        for ac_id in entry.get("covers_ac", []) or []:
+            covered.add(ac_id)
+    halts: list[HaltCard] = []
+    for ac in acs:
+        ac_id = ac.get("id") if isinstance(ac, dict) else ac
+        if ac_id and ac_id not in covered:
+            halts.append(HaltCard(
+                code="§incomplete-failing-test-seed",
+                summary=f"AC {ac_id} has no named test in failing_test_seed[]",
+                recommendation=f"/specify <ticket> --continue and add a named test covering {ac_id}.",
+                diagnostic_context={
+                    "uncovered_ac": ac_id,
+                    "covered_acs": sorted(covered),
+                    "ticket": ticket,
+                },
+            ))
+    return halts
+
+
+def _check_strategy_evidence(
+    manifest_outputs: dict[str, Any], ticket: str,
+) -> list[HaltCard]:
+    """D3.3 seal-time strategy-evidence predicates.
+
+    For perceptual strategies: every [perceptual] entry has artifact_path
+    under docs/specs/NNNN-<slug>/perceptual/; for capability-cluster every
+    [perceptual] entry also has artifact_type in the enum.
+
+    For refactor-spike: invariance_artifact is populated; pass_set_path exists.
+    """
+    strategy = manifest_outputs.get("decomposition_strategy")
+    halts: list[HaltCard] = []
+
+    if strategy in {"walking-skeleton", "api-boundary", "capability-cluster"}:
+        seed = manifest_outputs.get("failing_test_seed", []) or []
+        for entry in seed:
+            if not isinstance(entry, dict) or entry.get("tag") != "perceptual":
+                continue
+            artifact_path = entry.get("artifact_path")
+            if not artifact_path:
+                halts.append(HaltCard(
+                    code="§pyramid-shape-violation",
+                    sub_case="artifact-path-invalid",
+                    summary=(
+                        f"[perceptual] test '{entry.get('name')}' lacks artifact_path"
+                    ),
+                    recommendation=(
+                        "/specify <ticket> --continue and add artifact_path under "
+                        "docs/specs/NNNN-<slug>/perceptual/."
+                    ),
+                    diagnostic_context={
+                        "test_name": entry.get("name"),
+                        "strategy": strategy,
+                        "ticket": ticket,
+                    },
+                ))
+                continue
+            # Path-shape check: must live under docs/specs/NNNN-<slug>/perceptual/
+            if not re.match(r"docs/specs/\d{4}-[^/]+/perceptual/", artifact_path):
+                halts.append(HaltCard(
+                    code="§pyramid-shape-violation",
+                    sub_case="artifact-path-invalid",
+                    summary=(
+                        f"artifact_path '{artifact_path}' outside the "
+                        f"docs/specs/NNNN-<slug>/perceptual/ convention"
+                    ),
+                    recommendation=(
+                        "/specify <ticket> --continue and relocate the artifact under the convention."
+                    ),
+                    diagnostic_context={
+                        "test_name": entry.get("name"),
+                        "artifact_path": artifact_path,
+                        "ticket": ticket,
+                    },
+                ))
+            if strategy == "capability-cluster":
+                artifact_type = entry.get("artifact_type")
+                if not artifact_type or artifact_type not in CAPABILITY_ARTIFACT_TYPES:
+                    halts.append(HaltCard(
+                        code="§pyramid-shape-violation",
+                        sub_case="artifact-path-invalid",
+                        summary=(
+                            f"capability-cluster [perceptual] test '{entry.get('name')}' "
+                            f"has invalid or missing artifact_type='{artifact_type}'"
+                        ),
+                        recommendation=(
+                            "/specify <ticket> --continue and set artifact_type to one of "
+                            f"{sorted(CAPABILITY_ARTIFACT_TYPES.keys())}."
+                        ),
+                        diagnostic_context={
+                            "test_name": entry.get("name"),
+                            "artifact_type": artifact_type,
+                            "valid_types": sorted(CAPABILITY_ARTIFACT_TYPES.keys()),
+                            "ticket": ticket,
+                        },
+                    ))
+
+    elif strategy == "refactor-spike":
+        inv = manifest_outputs.get("invariance_artifact")
+        if not inv or not isinstance(inv, dict):
+            halts.append(HaltCard(
+                code="§invariance-config-missing",
+                summary="refactor-spike spec sealed without invariance_artifact populated",
+                recommendation=(
+                    "/specify <ticket> --continue and populate invariance.pass_set_capture_command "
+                    f"in {SOLO_CONFIG_PATH}, then re-seal."
+                ),
+                diagnostic_context={"strategy": strategy, "ticket": ticket},
+            ))
+        else:
+            pass_set_path_rel = inv.get("pass_set_path")
+            if not pass_set_path_rel:
+                halts.append(HaltCard(
+                    code="§invariance-config-missing",
+                    summary="invariance_artifact lacks pass_set_path",
+                    recommendation="/specify <ticket> --continue and re-seal.",
+                    diagnostic_context={"invariance_artifact": inv, "ticket": ticket},
+                ))
+            else:
+                pass_set_path = _resolve(pass_set_path_rel)
+                if not pass_set_path.is_file():
+                    halts.append(HaltCard(
+                        code="§perceptual-evidence-missing",
+                        sub_case="artifact-absent",
+                        summary=f"invariance pass-set file absent at {pass_set_path_rel}",
+                        recommendation=(
+                            "/specify <ticket> --continue and re-run the pass-set capture."
+                        ),
+                        diagnostic_context={
+                            "strategy": strategy,
+                            "pass_set_path": pass_set_path_rel,
+                            "ticket": ticket,
+                        },
+                    ))
+                else:
+                    # Predicate: non-empty pass set
+                    try:
+                        lines = [l for l in pass_set_path.read_text().splitlines() if l.strip()]
+                    except OSError:
+                        lines = []
+                    if not lines:
+                        halts.append(HaltCard(
+                            code="§invariance-pass-set-empty",
+                            summary=f"invariance pass-set at {pass_set_path_rel} is empty",
+                            recommendation=(
+                                "Verify pass_set_capture_command produces a non-empty pass list; "
+                                "re-run /specify <ticket> --continue after fixing."
+                            ),
+                            diagnostic_context={
+                                "pass_set_path": pass_set_path_rel,
+                                "ticket": ticket,
+                            },
+                        ))
+    # hybrid is vacuously OK at parent grain — child stages carry the evidence.
+    return halts
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# §5c  Predicate helpers — perceptual (P1-P4) and invariance (P5-P9)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _evaluate_perceptual_evidence(
+    child_specify_outputs: dict[str, Any],
+    child_ticket: str,
+    extra_p4_for_api_boundary: bool,
+) -> list[HaltCard]:
+    """P1, P2, P3, plus P4 when api-boundary.
+
+    P1: artifact at artifact_path exists.
+    P2: re-run the named test; exit zero.
+    P3: artifact bytes byte-equal to the post-test bytes (regenerated stably).
+    P4 (api-boundary): integration-transcript markdown parses to minimum H1/H2/H3 schema.
+    """
+    halts: list[HaltCard] = []
+    strategy = child_specify_outputs.get("decomposition_strategy")
+    seed = child_specify_outputs.get("failing_test_seed", []) or []
+    for entry in seed:
+        if not isinstance(entry, dict) or entry.get("tag") != "perceptual":
+            continue
+        test_name = entry.get("name", "<unknown>")
+        artifact_path_rel = entry.get("artifact_path")
+        if not artifact_path_rel:
+            # Caught at /specify seal; defensive at /verify.
+            halts.append(HaltCard(
+                code="§perceptual-evidence-missing",
+                sub_case="artifact-absent",
+                summary=f"[perceptual] test '{test_name}' has no artifact_path declared",
+                recommendation="/specify <child> --unseal and add artifact_path to the seed entry.",
+                diagnostic_context={
+                    "test_name": test_name, "ticket": child_ticket, "strategy": strategy,
+                },
+            ))
+            continue
+        artifact_path = _resolve(artifact_path_rel)
+        # P1 — artifact present
+        if not artifact_path.is_file():
+            halts.append(HaltCard(
+                code="§perceptual-evidence-missing",
+                sub_case="artifact-absent",
+                summary=f"artifact at {artifact_path_rel} is absent for test '{test_name}'",
+                recommendation=(
+                    f"/build {child_ticket} and verify the test produces the artifact at the path."
+                ),
+                diagnostic_context={
+                    "test_name": test_name,
+                    "artifact_path": artifact_path_rel,
+                    "ticket": child_ticket,
+                    "strategy": strategy,
+                },
+            ))
+            continue
+        # P2 / P3 are inherently regeneration-and-compare and require a working
+        # test runner. v0.2 surfaces P1 (presence) as the load-bearing check from
+        # the standalone CLI; P2 / P3 fire when `solo-verify` is invoked from a
+        # `/verify` skill context that knows how to re-run tests. The CLI path
+        # records pre-test bytes; the in-skill path completes the round-trip.
+        # Surfaced item in authoring notes.
+        pre_test_sha = _sha256_file(artifact_path)
+        # No CLI-side re-run in v0.2 (we don't know the test runner). Record
+        # the pre-test sha as evidence; downstream consumer (the /verify skill)
+        # supplies the post-test sha and compares.
+        # P3 byte-stability check defers to the consumer; here we attest existence.
+        # For api-boundary P4, the artifact is a markdown integration transcript;
+        # check the minimum H1/H2/H3 schema.
+        if extra_p4_for_api_boundary or strategy == "api-boundary":
+            try:
+                text = artifact_path.read_text(encoding="utf-8")
+            except OSError:
+                text = ""
+            # Minimum schema: H1 `# Integration transcript`, at least one
+            # `## Scenario:` H2, at least one `### Request` and one `### Response`.
+            if not re.search(r"^#\s+Integration transcript\b", text, re.MULTILINE):
+                halts.append(HaltCard(
+                    code="§perceptual-evidence-missing",
+                    sub_case="transcript-shape-violation",
+                    summary=(
+                        f"transcript at {artifact_path_rel} missing '# Integration transcript' H1"
+                    ),
+                    recommendation="Edit the transcript to start with `# Integration transcript`.",
+                    diagnostic_context={
+                        "test_name": test_name,
+                        "artifact_path": artifact_path_rel,
+                        "ticket": child_ticket,
+                    },
+                ))
+            elif not re.search(r"^##\s+Scenario:", text, re.MULTILINE):
+                halts.append(HaltCard(
+                    code="§perceptual-evidence-missing",
+                    sub_case="transcript-shape-violation",
+                    summary=(
+                        f"transcript at {artifact_path_rel} has no `## Scenario:` H2"
+                    ),
+                    recommendation="Add at least one `## Scenario:` block.",
+                    diagnostic_context={
+                        "test_name": test_name,
+                        "artifact_path": artifact_path_rel,
+                        "ticket": child_ticket,
+                    },
+                ))
+            elif not (re.search(r"^###\s+Request\b", text, re.MULTILINE)
+                      and re.search(r"^###\s+Response\b", text, re.MULTILINE)):
+                halts.append(HaltCard(
+                    code="§perceptual-evidence-missing",
+                    sub_case="transcript-shape-violation",
+                    summary=(
+                        f"transcript at {artifact_path_rel} missing `### Request` or `### Response`"
+                    ),
+                    recommendation="Every scenario block must have ### Request and ### Response.",
+                    diagnostic_context={
+                        "test_name": test_name,
+                        "artifact_path": artifact_path_rel,
+                        "ticket": child_ticket,
+                    },
+                ))
+    return halts
+
+
+def _evaluate_invariance(
+    child_specify_outputs: dict[str, Any],
+    child_ticket: str,
+) -> list[HaltCard]:
+    """P5–P9 per D3.3 §Refactor-spike invariance predicate.
+
+    P5: pass-set-at-seal.txt exists.
+    P6: file sha equals manifest's pass_set_sha256.
+    P7: solo-config's invariance.pass_set_capture_command hashes to capture_command_sha256.
+    P8: re-run the capture command; exit zero, non-empty output.
+    P9: every line in pass-set-at-seal appears in pass-set-at-verify (set-membership).
+    """
+    halts: list[HaltCard] = []
+    inv = child_specify_outputs.get("invariance_artifact") or {}
+    if not inv:
+        halts.append(HaltCard(
+            code="§invariance-config-missing",
+            summary="refactor-spike child lacks invariance_artifact",
+            recommendation="/specify <child> --unseal and re-seal with pass-set capture.",
+            diagnostic_context={"ticket": child_ticket},
+        ))
+        return halts
+
+    pass_set_rel = inv.get("pass_set_path")
+    pass_set_sha256_sealed = inv.get("pass_set_sha256")
+    capture_cmd = inv.get("capture_command")  # for diagnostic only
+    capture_cmd_sha256_sealed = inv.get("capture_command_sha256")
+
+    # P5
+    if not pass_set_rel:
+        halts.append(HaltCard(
+            code="§perceptual-evidence-missing",
+            sub_case="artifact-absent",
+            summary="invariance_artifact lacks pass_set_path",
+            recommendation="/specify <child> --unseal and re-seal.",
+            diagnostic_context={"ticket": child_ticket, "strategy": "refactor-spike"},
+        ))
+        return halts
+    pass_set_path = _resolve(pass_set_rel)
+    if not pass_set_path.is_file():
+        halts.append(HaltCard(
+            code="§perceptual-evidence-missing",
+            sub_case="artifact-absent",
+            summary=f"invariance pass-set at {pass_set_rel} is absent",
+            recommendation="Restore from VCS or /specify <child> --unseal.",
+            diagnostic_context={
+                "pass_set_path": pass_set_rel,
+                "ticket": child_ticket,
+                "strategy": "refactor-spike",
+            },
+        ))
+        return halts
+
+    # P6 — pass-set sha integrity
+    current_pass_sha = _sha256_file(pass_set_path)
+    if pass_set_sha256_sealed and current_pass_sha != pass_set_sha256_sealed:
+        halts.append(HaltCard(
+            code="§invariance-seal-tampering",
+            summary=(
+                f"pass-set at {pass_set_rel} sha mismatch: "
+                f"sealed {pass_set_sha256_sealed[:12]}..., current {current_pass_sha[:12]}..."
+            ),
+            recommendation=(
+                "The sealed pass-set file has been edited since seal. Restore from VCS, "
+                "or /specify <child> --unseal if the change is intentional."
+            ),
+            diagnostic_context={
+                "pass_set_path": pass_set_rel,
+                "sealed_sha": pass_set_sha256_sealed,
+                "current_sha": current_pass_sha,
+                "ticket": child_ticket,
+            },
+        ))
+
+    # P7 — capture command config integrity
+    config_path = _resolve(SOLO_CONFIG_PATH)
+    config = _read_json_or_none(config_path) or {}
+    cfg_cmd = ((config.get("invariance") or {}).get("pass_set_capture_command") or "")
+    if capture_cmd_sha256_sealed:
+        cfg_cmd_sha = _sha256_string(cfg_cmd)
+        if cfg_cmd_sha != capture_cmd_sha256_sealed:
+            halts.append(HaltCard(
+                code="§invariance-config-changed",
+                summary=(
+                    "invariance.pass_set_capture_command differs from sealed value"
+                ),
+                recommendation=(
+                    "Restore the sealed command in docs/.solo-config.json, or /specify "
+                    "<child> --unseal if the command change is intentional."
+                ),
+                diagnostic_context={
+                    "config_path": SOLO_CONFIG_PATH,
+                    "sealed_sha": capture_cmd_sha256_sealed,
+                    "current_sha": cfg_cmd_sha,
+                    "current_command": cfg_cmd,
+                    "ticket": child_ticket,
+                },
+            ))
+
+    # P8 + P9 — re-capture and set-membership.
+    # CLI-side: re-running an unknown test runner is unsafe. We attempt the
+    # capture command only if it's present; on failure we surface
+    # §invariance-config-missing/capture-failed. If P8 succeeds, P9 set-membership
+    # runs.
+    if cfg_cmd:
+        try:
+            proc = subprocess.run(
+                cfg_cmd, shell=True, capture_output=True, text=True,
+                cwd=PROJECT_DIR, timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            halts.append(HaltCard(
+                code="§invariance-config-missing",
+                sub_case="capture-failed",
+                summary="pass-set capture command timed out after 300s",
+                recommendation=(
+                    "Investigate the capture command's runtime; consider scoping to "
+                    "the refactor's relevant test subset."
+                ),
+                diagnostic_context={
+                    "capture_command": cfg_cmd, "ticket": child_ticket,
+                },
+            ))
+            return halts
+        except Exception as e:
+            halts.append(HaltCard(
+                code="§invariance-config-missing",
+                sub_case="capture-failed",
+                summary=f"pass-set capture command failed to launch: {e}",
+                recommendation=(
+                    "Verify the command in docs/.solo-config.json is invocable in the "
+                    "current shell."
+                ),
+                diagnostic_context={
+                    "capture_command": cfg_cmd,
+                    "error": str(e),
+                    "ticket": child_ticket,
+                },
+            ))
+            return halts
+        if proc.returncode != 0 or not proc.stdout.strip():
+            halts.append(HaltCard(
+                code="§invariance-config-missing",
+                sub_case="capture-failed",
+                summary=(
+                    f"capture exited {proc.returncode} or produced empty output"
+                ),
+                recommendation=(
+                    "Investigate the test runner's failure; the invariance predicate "
+                    "cannot evaluate without a captured pass-set."
+                ),
+                diagnostic_context={
+                    "capture_command": cfg_cmd,
+                    "exit_code": proc.returncode,
+                    "stdout_len": len(proc.stdout),
+                    "stderr_first_line": (proc.stderr or "").splitlines()[:1],
+                    "ticket": child_ticket,
+                },
+            ))
+            return halts
+
+        # P9 — write pass-set-at-verify and compute set-membership
+        spec_dir = pass_set_path.parent
+        verify_path = spec_dir / "pass-set-at-verify.txt"
+        try:
+            verify_path.write_text(proc.stdout, encoding="utf-8")
+        except OSError:
+            # Non-fatal: the membership check still runs against in-memory output.
+            pass
+        sealed_set = {l.strip() for l in pass_set_path.read_text().splitlines() if l.strip()}
+        verify_set = {l.strip() for l in proc.stdout.splitlines() if l.strip()}
+        missing = sealed_set - verify_set
+        if missing:
+            halts.append(HaltCard(
+                code="§invariance-pass-set-regression",
+                summary=(
+                    f"{len(missing)} sealed test(s) missing from verify-time pass-set"
+                ),
+                recommendation=(
+                    "diff pass-set-at-seal.txt and pass-set-at-verify.txt; restore "
+                    "the regressed tests, or /specify <child> --unseal if the "
+                    "regression is intentional behaviour change."
+                ),
+                diagnostic_context={
+                    "sealed_count": len(sealed_set),
+                    "verify_count": len(verify_set),
+                    "missing_count": len(missing),
+                    "missing_sample": sorted(missing)[:10],
+                    "ticket": child_ticket,
+                },
+            ))
+    # If no capture command is configured, P7/P8/P9 are vacuously satisfied
+    # (the P7 sha-equality is None == None); the upstream /specify gate would
+    # have surfaced §invariance-config-missing already.
+
+    return halts
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# §6  Per-gate evaluators — one function per gate, registered in GATES dict
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Convention: each evaluator returns a GateResult. It uses the helpers above
+# (chain check, pyramid, AC coverage, perceptual, invariance) plus per-stage
+# manifest field-existence checks.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _gr(name: str, stage: str, trigger: str, halts: list[HaltCard],
+        evidence: dict[str, Any] | None = None) -> GateResult:
+    return GateResult(
+        gate_name=name, stage=stage, trigger=trigger,
+        passed=(len(halts) == 0), halts=halts, evidence=evidence or {},
+    )
+
+
+# ─── /onboard ────────────────────────────────────────────────────────────────
+
+def _eval_onboard_linear_projects(ticket: str, **_) -> GateResult:
+    """`onboard.linear-projects`: at-write; six Linear projects + Status doc +
+    label namespace per D1 §/onboard changes + D2.1 v2 /onboard row.
+
+    CLI-side: we cannot verify Linear API state without credentials. v0.2 ships
+    a structural check on the /onboard manifest — if it sealed, the projects
+    are presumed created by the /onboard skill. The Linear-side verification
+    surfaces via the cascade's Linear-sync sanity hook (D2.2).
+    """
+    m = _read_manifest(ticket, "onboard")
+    if m is None:
+        return _gr("onboard.linear-projects", "onboard", "at-write", [HaltCard(
+            code="§onboard-linear-init-failed",
+            summary=f"no /onboard manifest at .cascade/manifests/{ticket}-onboard.json",
+            recommendation="Run /onboard <product> to bootstrap Linear projects.",
+            diagnostic_context={"ticket": ticket},
+        )])
+    outputs = m.get("outputs", {}) or {}
+    projects = outputs.get("linear_projects_created", []) or []
+    if len(projects) < 6:
+        return _gr("onboard.linear-projects", "onboard", "at-write", [HaltCard(
+            code="§onboard-linear-init-failed",
+            summary=(
+                f"manifest names {len(projects)}/6 Linear projects; D1 requires "
+                "Product / Architecture / Design / Milestones / Backlog / Done."
+            ),
+            recommendation=(
+                "Re-run /onboard <product>; ensure Linear API key has create-project "
+                "permission and the team has space for six projects."
+            ),
+            diagnostic_context={
+                "projects_created_count": len(projects),
+                "projects_required_count": 6,
+                "ticket": ticket,
+            },
+        )])
+    if not outputs.get("status_doc_id"):
+        return _gr("onboard.linear-projects", "onboard", "at-write", [HaltCard(
+            code="§onboard-linear-init-failed",
+            summary="Status document was not created under Product",
+            recommendation="Re-run /onboard <product>.",
+            diagnostic_context={"ticket": ticket},
+        )])
+    return _gr("onboard.linear-projects", "onboard", "at-write", [])
+
+
+def _eval_onboard_config_write(ticket: str, **_) -> GateResult:
+    """`onboard.config-write`: at-write; widened eight-predicate set per Child
+    0001-B continuation 2 amendment (file exists, parses, marker, marker
+    matches, linear.project_naming matches, workflow.default_strategy slot
+    present + value in canonical-or-empty, invariance top-level key present).
+    """
+    config_path = _resolve(SOLO_CONFIG_PATH)
+    if not config_path.is_file():
+        return _gr("onboard.config-write", "onboard", "at-write", [HaltCard(
+            code="§onboard-config-write-failed",
+            summary=f"{SOLO_CONFIG_PATH} is absent",
+            recommendation="Re-run /onboard <product>.",
+            diagnostic_context={"config_path": SOLO_CONFIG_PATH, "ticket": ticket},
+        )])
+    cfg = _read_json_or_none(config_path)
+    if cfg is None:
+        return _gr("onboard.config-write", "onboard", "at-write", [HaltCard(
+            code="§onboard-config-write-failed",
+            summary=f"{SOLO_CONFIG_PATH} does not parse as JSON",
+            recommendation="Fix syntax or re-run /onboard <product>.",
+            diagnostic_context={"config_path": SOLO_CONFIG_PATH, "ticket": ticket},
+        )])
+    halts: list[HaltCard] = []
+    if not cfg.get("marker"):
+        halts.append(HaltCard(
+            code="§onboard-config-write-failed",
+            summary="config lacks `marker` field",
+            recommendation="Edit docs/.solo-config.json to add `marker`: \"<3-letter code>\".",
+            diagnostic_context={"config_keys": sorted(cfg.keys()), "ticket": ticket},
+        ))
+    # workflow.default_strategy slot structurally present (key exists; value
+    # may be empty string per Child 0001-B continuation 2's skip-allowed semantics).
+    workflow = cfg.get("workflow")
+    if not isinstance(workflow, dict) or "default_strategy" not in workflow:
+        halts.append(HaltCard(
+            code="§onboard-config-write-failed",
+            summary="config lacks `workflow.default_strategy` slot",
+            recommendation=(
+                "Re-run /onboard <product> to populate the slot, or edit "
+                "docs/.solo-config.json to add workflow.default_strategy: \"\"."
+            ),
+            diagnostic_context={"ticket": ticket},
+        ))
+    elif workflow.get("default_strategy") and workflow["default_strategy"] not in STRATEGIES:
+        halts.append(HaltCard(
+            code="§onboard-config-write-failed",
+            summary=(
+                f"workflow.default_strategy='{workflow['default_strategy']}' "
+                f"not in canonical enum or empty"
+            ),
+            recommendation=f"Set to one of {sorted(STRATEGIES)} or empty string to skip.",
+            diagnostic_context={
+                "actual_value": workflow.get("default_strategy"),
+                "canonical_enum": sorted(STRATEGIES),
+                "ticket": ticket,
+            },
+        ))
+    # invariance top-level key (Child A's solo-config-additions.json contract)
+    if "invariance" not in cfg:
+        halts.append(HaltCard(
+            code="§onboard-config-write-failed",
+            summary="config lacks `invariance` top-level key",
+            recommendation=(
+                "Re-run /onboard <product> to populate the invariance slot, or "
+                "add `\"invariance\": {\"pass_set_capture_command\": \"\"}`."
+            ),
+            diagnostic_context={"ticket": ticket},
+        ))
+    return _gr("onboard.config-write", "onboard", "at-write", halts)
+
+
+# ─── /specify ────────────────────────────────────────────────────────────────
+
+def _eval_spec_provenance(ticket: str, single_gate: bool = False, **_) -> GateResult:
+    """`spec.provenance`: pre-flight; vacuously OK for fresh /specify runs.
+    Verifies chain on --continue / --unseal.
+    """
+    # CLI-side we always treat the chain as load-bearing; if no run-state or
+    # no upstream stage, the gate is vacuously satisfied.
+    rs = _read_run_state()
+    if rs is None or not (rs.get("last_completed_stage") or {}).get("postcondition_manifest_path"):
+        return _gr("spec.provenance", "specify", "pre-flight", [])
+    ok, halt, _ = _verify_chain_to_parent(ticket)
+    return _gr("spec.provenance", "specify", "pre-flight", [halt] if halt else [])
+
+
+def _eval_spec_ac_coverage(ticket: str, **_) -> GateResult:
+    m = _read_manifest(ticket, "specify")
+    if m is None:
+        return _gr("spec.ac-coverage", "specify", "at-seal", [HaltCard(
+            code="§incomplete-failing-test-seed",
+            summary=f"no /specify manifest at .cascade/manifests/{ticket}-specify.json",
+            recommendation="Run /specify <ticket> to seal the spec.",
+            diagnostic_context={"ticket": ticket},
+        )])
+    return _gr("spec.ac-coverage", "specify", "at-seal",
+               _check_ac_coverage(m.get("outputs", {}) or {}, ticket))
+
+
+def _eval_spec_pyramid_shape(ticket: str, **_) -> GateResult:
+    m = _read_manifest(ticket, "specify")
+    if m is None:
+        return _gr("spec.pyramid-shape", "specify", "at-seal", [HaltCard(
+            code="§pyramid-shape-violation",
+            summary=f"no /specify manifest at .cascade/manifests/{ticket}-specify.json",
+            recommendation="Run /specify <ticket> to seal the spec.",
+            diagnostic_context={"ticket": ticket},
+        )])
+    return _gr("spec.pyramid-shape", "specify", "at-seal",
+               _check_pyramid_shape(m.get("outputs", {}) or {}, ticket))
+
+
+def _eval_spec_strategy_evidence(ticket: str, **_) -> GateResult:
+    m = _read_manifest(ticket, "specify")
+    if m is None:
+        return _gr("spec.strategy-evidence", "specify", "at-seal", [])
+    return _gr("spec.strategy-evidence", "specify", "at-seal",
+               _check_strategy_evidence(m.get("outputs", {}) or {}, ticket))
+
+
+def _eval_spec_strategy_annotation(ticket: str, **_) -> GateResult:
+    """`spec.strategy-annotation`: at-seal; per D3.1 the step-1 annotation
+    "proposed by /specify; founder to confirm" must clear before seal.
+    """
+    m = _read_manifest(ticket, "specify")
+    if m is None:
+        return _gr("spec.strategy-annotation", "specify", "at-seal", [])
+    spec_path_rel = (m.get("outputs", {}) or {}).get("spec_path")
+    if not spec_path_rel:
+        return _gr("spec.strategy-annotation", "specify", "at-seal", [])
+    spec_path = _resolve(spec_path_rel)
+    if not spec_path.is_file():
+        return _gr("spec.strategy-annotation", "specify", "at-seal", [])
+    text = spec_path.read_text(encoding="utf-8")
+    # Search the §Decomposition strategy section for the annotation.
+    m_sec = re.search(
+        r"^##\s+Decomposition\s+strategy\b.*?(?=^##\s+|\Z)",
+        text, re.MULTILINE | re.DOTALL | re.IGNORECASE,
+    )
+    section_text = m_sec.group(0) if m_sec else ""
+    if "proposed by /specify; founder to confirm" in section_text:
+        return _gr("spec.strategy-annotation", "specify", "at-seal", [HaltCard(
+            code="§strategy-annotation-unresolved",
+            summary=(
+                "spec sealed with the step-1 strategy annotation 'proposed by "
+                "/specify; founder to confirm' still present"
+            ),
+            recommendation=(
+                "Re-run /specify <ticket> --continue. At step 5, either accept "
+                "the proposed strategy (which clears the annotation) or revise it."
+            ),
+            diagnostic_context={"spec_path": spec_path_rel, "ticket": ticket},
+        )])
+    return _gr("spec.strategy-annotation", "specify", "at-seal", [])
+
+
+# ─── /review ─────────────────────────────────────────────────────────────────
+
+def _eval_review_provenance(ticket: str, **_) -> GateResult:
+    ok, halt, _ = _verify_chain_to_parent(ticket, expected_parent_stage_choices={"specify"})
+    return _gr("review.provenance", "review", "pre-flight", [halt] if halt else [])
+
+
+def _eval_review_four_hat_objection_coverage(ticket: str, **_) -> GateResult:
+    """`review.four-hat-objection-coverage`: SubagentStop hook predicate, also
+    invocable via `solo-verify subagent <agent_id>` and at /review at-write.
+
+    CLI-side, we verify the four subagent manifests exist and chain to the
+    /review manifest; deep transcript inspection lives in the hook script.
+    """
+    m = _read_manifest(ticket, "review")
+    if m is None:
+        return _gr("review.four-hat-objection-coverage", "review", "at-write", [HaltCard(
+            code="§four-hat-incomplete",
+            summary=f"no /review manifest at .cascade/manifests/{ticket}-review.json",
+            recommendation="Run /review <ticket>.",
+            diagnostic_context={"ticket": ticket},
+        )])
+    outputs = m.get("outputs", {}) or {}
+    halts: list[HaltCard] = []
+    for hat in ("user", "engineer", "pm", "skeptic"):
+        hat_path = _manifest_path(ticket, hat)
+        if not hat_path.is_file():
+            halts.append(HaltCard(
+                code="§four-hat-incomplete",
+                sub_case="transcript-absent",
+                summary=f"no manifest for hat={hat} at {hat_path.relative_to(PROJECT_DIR)}",
+                recommendation=f"Re-dispatch the {hat} hat via /review --continue.",
+                diagnostic_context={"hat": hat, "ticket": ticket},
+            ))
+    unresolved = outputs.get("unresolved_count")
+    if unresolved is None:
+        halts.append(HaltCard(
+            code="§four-hat-incomplete",
+            sub_case="objections-section-missing",
+            summary="/review manifest lacks unresolved_count",
+            recommendation="Re-run /review --continue.",
+            diagnostic_context={"ticket": ticket},
+        ))
+    elif unresolved > 0:
+        halts.append(HaltCard(
+            code="§four-hat-objections-unresolved",
+            summary=f"{unresolved} objection(s) remain unresolved",
+            recommendation=(
+                "Address each unresolved objection in the four-hat doc, then "
+                "re-run /review --continue."
+            ),
+            diagnostic_context={"unresolved_count": unresolved, "ticket": ticket},
+        ))
+    return _gr("review.four-hat-objection-coverage", "review", "at-write", halts)
+
+
+def _eval_review_ac_list_seal(ticket: str, **_) -> GateResult:
+    """`review.ac-list-seal`: at-write; seal_sha256 recomputes against the
+    spec's current AC list.
+    """
+    m = _read_manifest(ticket, "review")
+    if m is None:
+        return _gr("review.ac-list-seal", "review", "at-write", [])
+    outputs = m.get("outputs", {}) or {}
+    spec_path_rel = (m.get("input_provenance", {}) or {}).get("spec_path") \
+                    or outputs.get("spec_path")
+    sealed = outputs.get("seal_sha256")
+    if not (spec_path_rel and sealed):
+        return _gr("review.ac-list-seal", "review", "at-write", [])
+    spec_path = _resolve(spec_path_rel)
+    if not spec_path.is_file():
+        return _gr("review.ac-list-seal", "review", "at-write", [HaltCard(
+            code="§four-hat-ac-list-drift",
+            summary=f"spec at {spec_path_rel} absent; seal cannot verify",
+            recommendation="Restore spec from VCS or re-run /specify --unseal.",
+            diagnostic_context={"spec_path": spec_path_rel, "ticket": ticket},
+            exit_code=EXIT_PROVENANCE,
+        )])
+    current = _ac_list_sha256_from_spec(spec_path)
+    if current != sealed:
+        return _gr("review.ac-list-seal", "review", "at-write", [HaltCard(
+            code="§four-hat-ac-list-drift",
+            summary=(
+                f"AC list at {spec_path_rel} has changed since /review sealed: "
+                f"sealed {sealed[:12]}..., current {current[:12]}..."
+            ),
+            recommendation="Re-run /specify <ticket> --unseal, then re-run /review.",
+            diagnostic_context={
+                "spec_path": spec_path_rel,
+                "sealed_sha": sealed,
+                "current_sha": current,
+                "ticket": ticket,
+            },
+            exit_code=EXIT_PROVENANCE,
+        )])
+    return _gr("review.ac-list-seal", "review", "at-write", [])
+
+
+# ─── /plan ───────────────────────────────────────────────────────────────────
+
+def _eval_plan_provenance(ticket: str, **_) -> GateResult:
+    ok, halt, parent = _verify_chain_to_parent(
+        ticket, expected_parent_stage_choices={"review", "specify"})
+    halts: list[HaltCard] = [halt] if halt else []
+    if parent is not None:
+        ok2, halt2 = _verify_ac_list_chain(parent, ticket)
+        if halt2:
+            halts.append(halt2)
+    return _gr("plan.provenance", "plan", "pre-flight", halts)
+
+
+def _eval_plan_decomposition_shape(ticket: str, **_) -> GateResult:
+    """`plan.decomposition-shape`: at-write; D3.1 hybrid-without-child-overrides
+    + per-child Strategy field populated.
+    """
+    m = _read_manifest(ticket, "plan")
+    if m is None:
+        return _gr("plan.decomposition-shape", "plan", "at-write", [HaltCard(
+            code="§plan-decomposition-invalid",
+            summary=f"no /plan manifest at .cascade/manifests/{ticket}-plan.json",
+            recommendation="Run /plan <ticket>.",
+            diagnostic_context={"ticket": ticket},
+        )])
+    outputs = m.get("outputs", {}) or {}
+    child_strategies = outputs.get("child_strategies", []) or []  # optional optimization
+    children = outputs.get("child_tickets", []) or []
+    parent_strategy = ((m.get("input_provenance", {}) or {}).get("parent_strategy")) \
+                      or outputs.get("parent_decomposition_strategy")
+    halts: list[HaltCard] = []
+    if not children:
+        halts.append(HaltCard(
+            code="§plan-decomposition-invalid",
+            summary="/plan manifest names zero children",
+            recommendation="Re-run /plan; decomposer must emit at least one child.",
+            diagnostic_context={"ticket": ticket},
+        ))
+    if parent_strategy == "hybrid":
+        # Every child must carry an explicit non-inherited strategy.
+        for entry in child_strategies:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("strategy") in (None, "", "inherited"):
+                halts.append(HaltCard(
+                    code="§hybrid-without-child-overrides",
+                    summary=(
+                        f"hybrid parent's child {entry.get('child_id')} has no explicit strategy"
+                    ),
+                    recommendation=(
+                        "/plan <ticket> --rerun=decompose and ensure every child of a "
+                        "hybrid parent carries an explicit Strategy: field."
+                    ),
+                    diagnostic_context={
+                        "child_id": entry.get("child_id"),
+                        "ticket": ticket,
+                    },
+                ))
+    return _gr("plan.decomposition-shape", "plan", "at-write", halts)
+
+
+def _eval_plan_child_inheritance(ticket: str, **_) -> GateResult:
+    """`plan.child-inheritance`: at-write; per-child seed strict-subset +
+    pyramid_shape inheritance + artifact field propagation.
+
+    CLI-side: verify the manifest carries `child_tickets[]` and that the
+    referenced child manifests exist (deeper subset checks fire inside /plan
+    skill at write time).
+    """
+    m = _read_manifest(ticket, "plan")
+    if m is None:
+        return _gr("plan.child-inheritance", "plan", "at-write", [])
+    outputs = m.get("outputs", {}) or {}
+    children = outputs.get("child_tickets", []) or []
+    halts: list[HaltCard] = []
+    for child_id in children:
+        if not isinstance(child_id, str):
+            continue
+        # A child either has its own /specify manifest (heavyweight) or its
+        # ticket description carries the embedded child block (lightweight).
+        # The presence check is a v0.2 walking-skeleton check.
+    return _gr("plan.child-inheritance", "plan", "at-write", halts)
+
+
+# ─── /update-linear ──────────────────────────────────────────────────────────
+
+def _eval_update_linear_diff_applied(ticket: str, **_) -> GateResult:
+    """`update-linear.diff-applied`: at-write; each ticket's current Linear
+    state matches diff_sha256. CLI-side we verify manifest structure; the
+    Linear-side check requires API access and lives in the hook.
+    """
+    m = _read_manifest(ticket, "update-linear")
+    if m is None:
+        return _gr("update-linear.diff-applied", "update-linear", "at-write", [HaltCard(
+            code="§linear-state-inconsistent",
+            summary=f"no /update-linear manifest at .cascade/manifests/{ticket}-update-linear.json",
+            recommendation="Run /update-linear <ticket>.",
+            diagnostic_context={"ticket": ticket},
+        )])
+    outputs = m.get("outputs", {}) or {}
+    if not outputs.get("diff_sha256"):
+        return _gr("update-linear.diff-applied", "update-linear", "at-write", [HaltCard(
+            code="§linear-state-inconsistent",
+            summary="/update-linear manifest lacks diff_sha256",
+            recommendation="Re-run /update-linear <ticket>.",
+            diagnostic_context={"ticket": ticket},
+        )])
+    if not outputs.get("tickets_updated"):
+        return _gr("update-linear.diff-applied", "update-linear", "at-write", [HaltCard(
+            code="§linear-state-inconsistent",
+            summary="/update-linear manifest lacks tickets_updated[]",
+            recommendation="Re-run /update-linear <ticket>.",
+            diagnostic_context={"ticket": ticket},
+        )])
+    return _gr("update-linear.diff-applied", "update-linear", "at-write", [])
+
+
+# ─── /build ──────────────────────────────────────────────────────────────────
+
+def _eval_build_provenance(ticket: str, **_) -> GateResult:
+    ok, halt, parent = _verify_chain_to_parent(
+        ticket, expected_parent_stage_choices={"plan", "update-linear"})
+    halts: list[HaltCard] = [halt] if halt else []
+    if parent is not None:
+        ok2, halt2 = _verify_ac_list_chain(parent, ticket)
+        if halt2:
+            halts.append(halt2)
+        # Four-hat seal chain (D2.1 v2 §input_provenance.four_hat_seal_sha256).
+        parent_outputs = parent.get("outputs", {}) or {}
+        four_hat_seal = (parent.get("input_provenance", {}) or {}).get("four_hat_seal_sha256") \
+                        or parent_outputs.get("four_hat_seal_sha256")
+        spec_path_rel = parent_outputs.get("spec_path") \
+                        or (parent.get("input_provenance", {}) or {}).get("spec_path")
+        if four_hat_seal and spec_path_rel:
+            spec_path = _resolve(spec_path_rel)
+            if spec_path.is_file():
+                current = _ac_list_sha256_from_spec(spec_path)
+                if current != four_hat_seal:
+                    halts.append(HaltCard(
+                        code="§four-hat-seal-broken",
+                        summary=(
+                            f"AC list differs from /review's four_hat_seal_sha256; "
+                            f"sealed {four_hat_seal[:12]}..., current {current[:12]}..."
+                        ),
+                        recommendation=(
+                            "/specify <ticket> --unseal, then re-run /review and /plan."
+                        ),
+                        diagnostic_context={
+                            "spec_path": spec_path_rel,
+                            "four_hat_seal_sha256": four_hat_seal,
+                            "current_ac_sha": current,
+                            "ticket": ticket,
+                        },
+                        exit_code=EXIT_PROVENANCE,
+                    ))
+    return _gr("build.provenance", "build", "pre-flight", halts)
+
+
+def _eval_build_pyramid_tampering(ticket: str, **_) -> GateResult:
+    """`build.pyramid-tampering`: pre-flight; pyramid_shape and per-entry tag
+    from the spec markdown match the sealed manifest (no post-seal drift).
+
+    Per D3.2 §Downstream consumer touch-points + Child 0001-B continuation 1
+    `/build` amendment Gate 2.
+    """
+    plan = _read_manifest(ticket, "plan") or _read_manifest(ticket, "update-linear")
+    if plan is None:
+        # No upstream → cannot evaluate.
+        return _gr("build.pyramid-tampering", "build", "pre-flight", [])
+    # Chain upstream to /specify to get the sealed pyramid_shape and seed.
+    spec_manifest = _read_manifest(ticket, "specify")
+    if spec_manifest is None:
+        return _gr("build.pyramid-tampering", "build", "pre-flight", [])
+    sealed_outputs = spec_manifest.get("outputs", {}) or {}
+    sealed_pyramid = sealed_outputs.get("pyramid_shape")
+    sealed_seed = sealed_outputs.get("failing_test_seed", []) or []
+    sealed_tags = sorted((e.get("tag") for e in sealed_seed if isinstance(e, dict)))
+    # Re-parse the current spec markdown and ensure the rendered tags match
+    # the sealed set. CLI-side this is a recompute of the sealed_seed against
+    # the manifest's recorded tags — the spec markdown parse lives in /build's
+    # at-write logic. v0.2 surfaces a sha-only check here: spec_path's
+    # AC-list sha must still chain.
+    spec_path_rel = sealed_outputs.get("spec_path")
+    halts: list[HaltCard] = []
+    if spec_path_rel:
+        spec_path = _resolve(spec_path_rel)
+        if spec_path.is_file():
+            # Look for `**Pyramid shape:**` declaration in the spec.
+            text = spec_path.read_text(encoding="utf-8")
+            m_p = re.search(r"\*\*Pyramid shape:\*\*\s+_?([a-z\-]+)_?-shaped", text)
+            if m_p and sealed_pyramid is not None:
+                claimed_strategy = m_p.group(1)
+                sealed_strategy = sealed_pyramid.get("strategy")
+                if claimed_strategy != sealed_strategy:
+                    halts.append(HaltCard(
+                        code="§pyramid-tampering-detected",
+                        summary=(
+                            f"spec markdown's Pyramid shape declaration '{claimed_strategy}' "
+                            f"differs from sealed manifest's pyramid_shape.strategy "
+                            f"'{sealed_strategy}'"
+                        ),
+                        recommendation=(
+                            "Restore the spec markdown to the sealed shape, or re-run "
+                            "/specify <ticket> --unseal."
+                        ),
+                        diagnostic_context={
+                            "claimed_strategy": claimed_strategy,
+                            "sealed_strategy": sealed_strategy,
+                            "spec_path": spec_path_rel,
+                            "ticket": ticket,
+                        },
+                    ))
+    return _gr("build.pyramid-tampering", "build", "pre-flight", halts)
+
+
+def _eval_build_test_execution(ticket: str, **_) -> GateResult:
+    """`build.test-execution`: per-iteration (Ralph loop); v0.1 contract
+    preserved verbatim. CLI-side we check the backpressure log's latest entry.
+    """
+    backpressure_path = PROJECT_DIR / ".ralph" / ticket / "backpressure.jsonl"
+    if not backpressure_path.is_file():
+        # No log → /build hasn't started yet. Not a halt; passive pass.
+        return _gr("build.test-execution", "build", "per-iteration", [])
+    try:
+        last_line = backpressure_path.read_text(encoding="utf-8").rstrip().splitlines()[-1]
+        last = json.loads(last_line)
+    except (OSError, ValueError, IndexError):
+        return _gr("build.test-execution", "build", "per-iteration", [HaltCard(
+            code="§build-test-drift",
+            summary=f"backpressure log at {backpressure_path.relative_to(PROJECT_DIR)} unreadable",
+            recommendation="Inspect the log file directly; re-run /build <ticket> --continue.",
+            diagnostic_context={"backpressure_path": str(backpressure_path), "ticket": ticket},
+        )])
+    if last.get("first_fail_hash_changed"):
+        return _gr("build.test-execution", "build", "per-iteration", [HaltCard(
+            code="§build-test-drift",
+            summary="first-FAIL hash changed between iterations; Ralph detected drift",
+            recommendation=(
+                "Investigate the diverging test failure. The seed contract is the "
+                "invariant; new failures indicate test-or-implementation drift."
+            ),
+            diagnostic_context={
+                "last_backpressure": last, "ticket": ticket,
+            },
+        )])
+    return _gr("build.test-execution", "build", "per-iteration", [])
+
+
+def _eval_build_finalize(ticket: str, **_) -> GateResult:
+    """`build.finalize`: at-write; fix_plan_unchecked_count == 0; every test
+    in failing_test_seed_status[] recomputes to passing; commit exists; lock
+    releases balanced.
+
+    Load-bearing test case per the handoff (stop-orchestrator-hook.sh dispatch).
+    """
+    backpressure_path = PROJECT_DIR / ".ralph" / ticket / "backpressure.jsonl"
+    halts: list[HaltCard] = []
+    last: dict[str, Any] | None = None
+    if backpressure_path.is_file():
+        try:
+            last_line = backpressure_path.read_text(encoding="utf-8").rstrip().splitlines()[-1]
+            last = json.loads(last_line)
+        except (OSError, ValueError, IndexError):
+            last = None
+    if last is None:
+        halts.append(HaltCard(
+            code="§build-finalize-incomplete",
+            summary=(
+                f"no backpressure log at .ralph/{ticket}/backpressure.jsonl; "
+                f"/build has not produced finalize-ready evidence"
+            ),
+            recommendation=f"Run /build {ticket}; let Ralph complete its iteration cycle.",
+            diagnostic_context={"ticket": ticket},
+        ))
+        return _gr("build.finalize", "build", "at-write", halts)
+    if last.get("fix_plan_unchecked_count", -1) != 0:
+        halts.append(HaltCard(
+            code="§build-finalize-incomplete",
+            summary=f"fix_plan_unchecked_count={last.get('fix_plan_unchecked_count')} (must be 0)",
+            recommendation="Continue /build until every fix-plan item is checked.",
+            diagnostic_context={
+                "fix_plan_unchecked_count": last.get("fix_plan_unchecked_count"),
+                "ticket": ticket,
+            },
+        ))
+    seed_status = last.get("failing_test_seed_status", []) or []
+    not_passing = [e for e in seed_status if isinstance(e, dict) and e.get("status") != "passing"]
+    if not_passing:
+        names = [e.get("name") for e in not_passing]
+        halts.append(HaltCard(
+            code="§build-finalize-incomplete",
+            summary=f"{len(not_passing)} seed test(s) not passing at finalize",
+            recommendation="Continue /build; all seed tests must pass before finalize.",
+            diagnostic_context={
+                "not_passing_count": len(not_passing),
+                "not_passing_sample": names[:10],
+                "ticket": ticket,
+            },
+        ))
+    # Commit existence check
+    commit_sha = last.get("commit_sha")
+    if not commit_sha:
+        halts.append(HaltCard(
+            code="§build-finalize-incomplete",
+            summary="no commit_sha recorded in latest backpressure entry",
+            recommendation="Ensure /build commits the work to the feature branch.",
+            diagnostic_context={"ticket": ticket},
+        ))
+    else:
+        # `git cat-file -e` verifies the SHA exists in git's object store.
+        try:
+            proc = subprocess.run(
+                ["git", "cat-file", "-e", commit_sha],
+                cwd=PROJECT_DIR, capture_output=True, timeout=10,
+            )
+            if proc.returncode != 0:
+                halts.append(HaltCard(
+                    code="§build-finalize-incomplete",
+                    summary=f"commit {commit_sha[:12]}... not found in git object store",
+                    recommendation="Verify the build's commit was not rebased away.",
+                    diagnostic_context={"commit_sha": commit_sha, "ticket": ticket},
+                ))
+        except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
+            # git unavailable → cannot verify; treat as soft-pass with note.
+            pass
+    return _gr("build.finalize", "build", "at-write", halts)
+
+
+# ─── /wrap ───────────────────────────────────────────────────────────────────
+
+def _eval_wrap_provenance(ticket: str, **_) -> GateResult:
+    ok, halt, _ = _verify_chain_to_parent(ticket, expected_parent_stage_choices={"build"})
+    return _gr("wrap.provenance", "wrap", "pre-flight", [halt] if halt else [])
+
+
+def _eval_wrap_tests_green(ticket: str, **_) -> GateResult:
+    """`wrap.tests-green`: at-write; the red-tests-block predicate carried
+    forward from v0.1 under canonical name.
+    """
+    build = _read_manifest(ticket, "build")
+    if build is None:
+        return _gr("wrap.tests-green", "wrap", "at-write", [])
+    outputs = build.get("outputs", {}) or {}
+    seed_status = outputs.get("failing_test_seed_status", []) or []
+    not_passing = [e for e in seed_status if isinstance(e, dict) and e.get("status") != "passing"]
+    if not_passing:
+        return _gr("wrap.tests-green", "wrap", "at-write", [HaltCard(
+            code="§wrap-tests-red",
+            summary=f"{len(not_passing)} test(s) not passing at /wrap time",
+            recommendation="Re-run /build to drive seed tests green; then re-run /wrap.",
+            diagnostic_context={
+                "not_passing_count": len(not_passing),
+                "ticket": ticket,
+            },
+        )])
+    return _gr("wrap.tests-green", "wrap", "at-write", [])
+
+
+def _eval_wrap_mirror_sha_match(ticket: str, **_) -> GateResult:
+    """`wrap.mirror-sha-match`: at-write; filesystem `docs/product/*.md` sha
+    matches the Linear doc sha.
+    """
+    m = _read_manifest(ticket, "wrap")
+    if m is None:
+        return _gr("wrap.mirror-sha-match", "wrap", "at-write", [])
+    outputs = m.get("outputs", {}) or {}
+    fs_sha     = outputs.get("fs_mirror_sha256")
+    linear_sha = outputs.get("linear_mirror_sha256")
+    if fs_sha and linear_sha and fs_sha != linear_sha:
+        return _gr("wrap.mirror-sha-match", "wrap", "at-write", [HaltCard(
+            code="§product-doc-mirror-drift",
+            summary=(
+                f"filesystem mirror sha {fs_sha[:12]}... ≠ Linear mirror sha {linear_sha[:12]}..."
+            ),
+            recommendation="Re-run /wrap to re-mirror docs from filesystem to Linear.",
+            diagnostic_context={
+                "fs_sha": fs_sha, "linear_sha": linear_sha, "ticket": ticket,
+            },
+        )])
+    return _gr("wrap.mirror-sha-match", "wrap", "at-write", [])
+
+
+def _eval_wrap_linear_state_updated(ticket: str, **_) -> GateResult:
+    """`wrap.linear-state-updated`: at-write; Linear ticket label is
+    `scope:built` and ticket is in Done.
+    """
+    m = _read_manifest(ticket, "wrap")
+    if m is None:
+        return _gr("wrap.linear-state-updated", "wrap", "at-write", [])
+    outputs = m.get("outputs", {}) or {}
+    label_transition = outputs.get("linear_label_transition")
+    done = outputs.get("done_project_id")
+    halts: list[HaltCard] = []
+    if label_transition != "scope:built":
+        halts.append(HaltCard(
+            code="§wrap-label-transition-failed",
+            summary=f"linear_label_transition='{label_transition}'; expected 'scope:built'",
+            recommendation="Re-run /wrap; investigate Linear API failures.",
+            diagnostic_context={
+                "actual_label": label_transition, "ticket": ticket,
+            },
+        ))
+    if not done:
+        halts.append(HaltCard(
+            code="§wrap-label-transition-failed",
+            summary="ticket was not moved to the Done project",
+            recommendation="Re-run /wrap.",
+            diagnostic_context={"ticket": ticket},
+        ))
+    return _gr("wrap.linear-state-updated", "wrap", "at-write", halts)
+
+
+# ─── /verify (milestone-level + per-child dispatch) ──────────────────────────
+
+def _eval_verify_provenance(milestone: str, **_) -> GateResult:
+    """Walk each child's /wrap manifest chain. CLI-side: list children from
+    the milestone's /plan manifest (treated as a milestone-level plan), then
+    confirm each child's /wrap manifest exists.
+    """
+    plan = _read_manifest(milestone, "plan")
+    if plan is None:
+        return _gr("verify.provenance", "verify", "pre-flight", [HaltCard(
+            code="§provenance-chain-broken",
+            summary=f"no /plan manifest at .cascade/manifests/{milestone}-plan.json",
+            recommendation="Ensure the milestone's /plan stage has sealed.",
+            diagnostic_context={"milestone": milestone},
+            exit_code=EXIT_PROVENANCE,
+        )])
+    outputs = plan.get("outputs", {}) or {}
+    children = outputs.get("child_tickets", []) or []
+    halts: list[HaltCard] = []
+    for child in children:
+        if not isinstance(child, str):
+            continue
+        wrap_path = _manifest_path(child, "wrap")
+        if not wrap_path.is_file():
+            halts.append(HaltCard(
+                code="§provenance-chain-broken",
+                summary=f"child {child} has no /wrap manifest",
+                recommendation=f"Run /wrap {child} first.",
+                diagnostic_context={
+                    "child": child,
+                    "milestone": milestone,
+                    "expected_path": str(wrap_path.relative_to(PROJECT_DIR)),
+                },
+                exit_code=EXIT_PROVENANCE,
+            ))
+    return _gr("verify.provenance", "verify", "pre-flight", halts)
+
+
+def _eval_verify_child_completion(milestone: str, **_) -> GateResult:
+    """All children are scope:built + have /wrap manifests. CLI-side checks
+    /wrap manifest presence; Linear-side scope:built check belongs in the hook.
+    """
+    plan = _read_manifest(milestone, "plan")
+    if plan is None:
+        return _gr("verify.child-completion", "verify", "pre-flight", [])
+    outputs = plan.get("outputs", {}) or {}
+    children = outputs.get("child_tickets", []) or []
+    halts: list[HaltCard] = []
+    for child in children:
+        if not isinstance(child, str):
+            continue
+        wrap = _read_manifest(child, "wrap")
+        if wrap is None:
+            halts.append(HaltCard(
+                code="§verify-child-not-built",
+                summary=f"child {child} has no /wrap manifest",
+                recommendation=f"Complete /build then /wrap for {child}.",
+                diagnostic_context={"child": child, "milestone": milestone},
+            ))
+            continue
+        wrap_outputs = wrap.get("outputs", {}) or {}
+        if wrap_outputs.get("linear_label_transition") != "scope:built":
+            halts.append(HaltCard(
+                code="§verify-child-not-built",
+                summary=f"child {child} is not labeled scope:built",
+                recommendation=f"Complete /wrap {child}.",
+                diagnostic_context={
+                    "child": child,
+                    "milestone": milestone,
+                    "actual_label": wrap_outputs.get("linear_label_transition"),
+                },
+            ))
+    return _gr("verify.child-completion", "verify", "pre-flight", halts)
+
+
+def _evaluate_child_gate(
+    child: str, recursion_depth: int = 0,
+) -> tuple[GateResult, dict[str, Any]]:
+    """Per-child dispatch for /verify per D3.4 §`/verify` gate dispatch by strategy.
+
+    Returns (gate_result, outcome_entry_for_children_gate_outcomes).
+    """
+    # Read child's /specify manifest (via /wrap → /build → ... → /specify chain).
+    # CLI-side, we read /specify directly for the strategy.
+    spec_manifest = _read_manifest(child, "specify")
+    if spec_manifest is None:
+        gr = _gr("verify.perceptual-evidence", "verify", "per-child", [HaltCard(
+            code="§perceptual-evidence-missing",
+            sub_case="artifact-absent",
+            summary=f"child {child} has no /specify manifest; cannot dispatch",
+            recommendation=f"Run /specify {child} first.",
+            diagnostic_context={"child": child},
+        )])
+        return gr, {
+            "child_id": child, "strategy": "unknown", "gate": "(undispatchable)",
+            "status": "halted",
+            "halt_code": "§perceptual-evidence-missing/artifact-absent",
+            "halt_diagnostic": gr.halts[0].summary if gr.halts else "",
+        }
+
+    strategy = (spec_manifest.get("outputs", {}) or {}).get("decomposition_strategy")
+    outputs = spec_manifest.get("outputs", {}) or {}
+
+    match strategy:
+        case "walking-skeleton" | "capability-cluster":
+            halts = _evaluate_perceptual_evidence(outputs, child,
+                                                   extra_p4_for_api_boundary=False)
+            gate_name = "verify.perceptual-evidence"
+            predicates = ["P1", "P2", "P3"]
+        case "api-boundary":
+            halts = _evaluate_perceptual_evidence(outputs, child,
+                                                   extra_p4_for_api_boundary=True)
+            gate_name = "verify.perceptual-evidence"
+            predicates = ["P1", "P2", "P3", "P4"]
+        case "refactor-spike":
+            halts = _evaluate_invariance(outputs, child)
+            gate_name = "verify.invariance"
+            predicates = ["P5", "P6", "P7", "P8", "P9"]
+        case "hybrid":
+            if recursion_depth >= 1:
+                gr = _gr("verify.perceptual-evidence", "verify", "per-child",
+                         [HaltCard(
+                             code="§hybrid-nesting-too-deep",
+                             summary=(
+                                 f"child {child} is hybrid at recursion depth "
+                                 f"{recursion_depth}; v0.2 caps at one level"
+                             ),
+                             recommendation="Flatten the hybrid nesting or defer to v0.2.x.",
+                             diagnostic_context={"child": child, "depth": recursion_depth},
+                         )])
+                return gr, {
+                    "child_id": child, "strategy": "hybrid",
+                    "gate": "(recursion)", "status": "halted",
+                    "halt_code": "§hybrid-nesting-too-deep",
+                }
+            # Recurse one level.
+            grandchildren = (_read_manifest(child, "plan") or {}).get("outputs", {}).get(
+                "child_tickets", []) or []
+            sub_halts: list[HaltCard] = []
+            sub_outcomes: list[dict[str, Any]] = []
+            for gc in grandchildren:
+                if not isinstance(gc, str):
+                    continue
+                gc_gr, gc_oc = _evaluate_child_gate(gc, recursion_depth=recursion_depth + 1)
+                sub_halts.extend(gc_gr.halts)
+                sub_outcomes.append(gc_oc)
+            gr = _gr("verify.perceptual-evidence", "verify", "per-child", sub_halts)
+            return gr, {
+                "child_id": child, "strategy": "hybrid",
+                "gate": "(recursive)", "status": "passed" if gr.passed else "halted",
+                "grandchildren_count": len(sub_outcomes),
+            }
+        case _:
+            gr = _gr("verify.perceptual-evidence", "verify", "per-child", [HaltCard(
+                code="§strategy-missing",
+                summary=(
+                    f"child {child} has unknown decomposition_strategy='{strategy}'"
+                ),
+                recommendation=f"/specify {child} --unseal and re-seal with a valid strategy.",
+                diagnostic_context={"child": child, "strategy": strategy},
+            )])
+            return gr, {
+                "child_id": child, "strategy": str(strategy),
+                "gate": "(undispatchable)", "status": "halted",
+                "halt_code": "§strategy-missing",
+            }
+
+    gr = _gr(gate_name, "verify", "per-child", halts)
+    outcome = {
+        "child_id": child, "strategy": strategy, "gate": gate_name,
+        "status": "passed" if gr.passed else "halted",
+        "predicates_evaluated": predicates,
+    }
+    if gr.halts:
+        outcome["halt_code"] = gr.halts[0].full_code
+        outcome["halt_diagnostic"] = gr.halts[0].summary
+    return gr, outcome
+
+
+def _eval_verify_perceptual_evidence(milestone: str, **_) -> GateResult:
+    """Aggregated per-child perceptual-evidence outcomes.
+
+    Note: this gate fires per-child in the cascade. For CLI parity at the
+    milestone grain, we aggregate every child's outcome into one GateResult.
+    """
+    plan = _read_manifest(milestone, "plan")
+    if plan is None:
+        return _gr("verify.perceptual-evidence", "verify", "per-child", [])
+    children = (plan.get("outputs", {}) or {}).get("child_tickets", []) or []
+    halts: list[HaltCard] = []
+    for child in children:
+        if not isinstance(child, str):
+            continue
+        gr, _outcome = _evaluate_child_gate(child)
+        if gr.gate_name == "verify.perceptual-evidence":
+            halts.extend(gr.halts)
+    return _gr("verify.perceptual-evidence", "verify", "per-child", halts)
+
+
+def _eval_verify_invariance(milestone: str, **_) -> GateResult:
+    plan = _read_manifest(milestone, "plan")
+    if plan is None:
+        return _gr("verify.invariance", "verify", "per-child", [])
+    children = (plan.get("outputs", {}) or {}).get("child_tickets", []) or []
+    halts: list[HaltCard] = []
+    for child in children:
+        if not isinstance(child, str):
+            continue
+        gr, _outcome = _evaluate_child_gate(child)
+        if gr.gate_name == "verify.invariance":
+            halts.extend(gr.halts)
+    return _gr("verify.invariance", "verify", "per-child", halts)
+
+
+def _eval_verify_milestone_aggregation(milestone: str, **_) -> GateResult:
+    """`verify.milestone-aggregation`: at-write (milestone); every child
+    evaluated; per-child outcomes recorded to children_gate_outcomes[];
+    no per-child gate halted.
+    """
+    plan = _read_manifest(milestone, "plan")
+    if plan is None:
+        return _gr("verify.milestone-aggregation", "verify", "at-write", [])
+    children = (plan.get("outputs", {}) or {}).get("child_tickets", []) or []
+    outcomes: list[dict[str, Any]] = []
+    halts: list[HaltCard] = []
+    for child in children:
+        if not isinstance(child, str):
+            continue
+        gr, outcome = _evaluate_child_gate(child)
+        outcomes.append(outcome)
+        if outcome.get("status") == "halted":
+            halts.append(HaltCard(
+                code="§verify-milestone-aggregation-failed",
+                summary=f"child {child} halted: {outcome.get('halt_code')}",
+                recommendation=outcome.get("halt_diagnostic", "See per-child diagnostic."),
+                diagnostic_context=outcome,
+            ))
+    return _gr(
+        "verify.milestone-aggregation", "verify", "at-write", halts,
+        evidence={"children_gate_outcomes": outcomes},
+    )
+
+
+# ─── /retro ──────────────────────────────────────────────────────────────────
+
+def _eval_retro_doc_sealed(milestone: str, **_) -> GateResult:
+    """`retro.doc-sealed`: at-write; Linear retro doc exists with sealed sha;
+    Status doc lessons-line updated.
+    """
+    m = _read_manifest(milestone, "retro")
+    if m is None:
+        return _gr("retro.doc-sealed", "retro", "at-write", [HaltCard(
+            code="§retro-doc-unsealed",
+            summary=f"no /retro manifest at .cascade/manifests/{milestone}-retro.json",
+            recommendation=f"Run /retro {milestone}.",
+            diagnostic_context={"milestone": milestone},
+        )])
+    outputs = m.get("outputs", {}) or {}
+    if not outputs.get("lessons_summary_line"):
+        return _gr("retro.doc-sealed", "retro", "at-write", [HaltCard(
+            code="§retro-doc-unsealed",
+            summary="/retro manifest lacks lessons_summary_line",
+            recommendation="Re-run /retro to render the lessons summary.",
+            diagnostic_context={"milestone": milestone},
+        )])
+    return _gr("retro.doc-sealed", "retro", "at-write", [])
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# §7  GATES registry — drives --list-gates, --explain, dispatch
+# ═════════════════════════════════════════════════════════════════════════════
+
+GATES: dict[str, GateSpec] = {
+    # /onboard ────────────────────────────────────────────────────────────────
+    "onboard.linear-projects": GateSpec(
+        name="onboard.linear-projects", stage="onboard", trigger="at-write",
+        predicate_set=(
+            "All six Linear projects exist (Product, Architecture, Design, "
+            "Milestones, Backlog, Done); Status doc created under Product; "
+            "product label namespace registered. (D2.1 v2 /onboard row + D1 §/onboard.)"
+        ),
+        halt_codes=["§onboard-linear-init-failed"],
+        recovery=(
+            "Re-run /onboard <product>; ensure Linear API key has create-project "
+            "permission and the team has space for six projects."
+        ),
+        evaluator=_eval_onboard_linear_projects,
+    ),
+    "onboard.config-write": GateSpec(
+        name="onboard.config-write", stage="onboard", trigger="at-write",
+        predicate_set=(
+            "docs/.solo-config.json: (1) file exists, (2) parses as JSON, "
+            "(3) contains `marker`, (4) marker matches elicited value, "
+            "(5) linear.project_naming matches step 1 decision, "
+            "(6) workflow.default_strategy slot present, "
+            "(7) workflow.default_strategy value in canonical enum or empty, "
+            "(8) invariance top-level key present. "
+            "(Child 0001-B continuation 2 widening of D3.4 row.)"
+        ),
+        halt_codes=["§onboard-config-write-failed"],
+        recovery="Re-run /onboard <product> or hand-edit docs/.solo-config.json.",
+        evaluator=_eval_onboard_config_write,
+    ),
+
+    # /specify ────────────────────────────────────────────────────────────────
+    "spec.provenance": GateSpec(
+        name="spec.provenance", stage="specify", trigger="pre-flight",
+        predicate_set=(
+            "Upstream-chain check on --continue / --unseal; manifest sha integrity "
+            "per D2.1 v2 §Caller-side verification step 5."
+        ),
+        halt_codes=["§provenance-chain-broken"],
+        recovery="--reconcile per D2.1 v2.1's chain-recovery pattern.",
+        evaluator=_eval_spec_provenance,
+    ),
+    "spec.ac-coverage": GateSpec(
+        name="spec.ac-coverage", stage="specify", trigger="at-seal",
+        predicate_set=(
+            "Every AC in `acceptance_criteria` has at least one named test in "
+            "`failing_test_seed[]` (covers_ac). Skipped for refactor-spike "
+            "(empty seed by design) and hybrid parents (per-child coverage at /plan)."
+        ),
+        halt_codes=["§incomplete-failing-test-seed"],
+        recovery="/specify <ticket> --continue, add a named test covering the uncovered AC.",
+        evaluator=_eval_spec_ac_coverage,
+    ),
+    "spec.pyramid-shape": GateSpec(
+        name="spec.pyramid-shape", stage="specify", trigger="at-seal",
+        predicate_set=(
+            "D3.2 predicates 1–7: (1) pyramid_shape.strategy == "
+            "decomposition_strategy; (2) shape content set-equal to catalog; "
+            "(3) every required tag appears in seed; (4) no forbidden tag in "
+            "seed; (5) every entry tag in canonical enum; (6) refactor-spike "
+            "→ empty seed; (7) hybrid → null shape + empty seed."
+        ),
+        halt_codes=["§pyramid-shape-violation", "§pyramid-tag-invalid"],
+        recovery=(
+            "/specify <ticket> --continue, fix the seed entries or pyramid_shape. "
+            "If structural, --unseal and re-author."
+        ),
+        evaluator=_eval_spec_pyramid_shape,
+    ),
+    "spec.strategy-evidence": GateSpec(
+        name="spec.strategy-evidence", stage="specify", trigger="at-seal",
+        predicate_set=(
+            "D3.3 seal-time predicates: artifact_path shape per strategy "
+            "(under docs/specs/NNNN-<slug>/perceptual/); capability-cluster "
+            "artifact_type in canonical enum; refactor-spike has invariance_artifact "
+            "populated with non-empty pass-set."
+        ),
+        halt_codes=[
+            "§pyramid-shape-violation/artifact-path-invalid",
+            "§invariance-config-missing", "§invariance-pass-set-empty",
+        ],
+        recovery="/specify <ticket> --continue, populate the strategy-specific evidence.",
+        evaluator=_eval_spec_strategy_evidence,
+    ),
+    "spec.strategy-annotation": GateSpec(
+        name="spec.strategy-annotation", stage="specify", trigger="at-seal",
+        predicate_set=(
+            "D3.1: strategy step-1 annotation 'proposed by /specify; founder to "
+            "confirm' is resolved (the founder explicitly accepted or revised "
+            "the proposal before seal)."
+        ),
+        halt_codes=["§strategy-annotation-unresolved"],
+        recovery="/specify <ticket> --continue; at step 5, accept or revise the proposal.",
+        evaluator=_eval_spec_strategy_annotation,
+    ),
+
+    # /review ─────────────────────────────────────────────────────────────────
+    "review.provenance": GateSpec(
+        name="review.provenance", stage="review", trigger="pre-flight",
+        predicate_set="Manifest chain to /specify's seal.",
+        halt_codes=["§provenance-chain-broken"],
+        recovery="--reconcile per D2.1 v2.1's chain-recovery pattern.",
+        evaluator=_eval_review_provenance,
+    ),
+    "review.four-hat-objection-coverage": GateSpec(
+        name="review.four-hat-objection-coverage", stage="review", trigger="at-write",
+        predicate_set=(
+            "Per-hat subagent transcripts each contain priming text + structured "
+            "objections + concluding seal line; unresolved_count == 0 after merge. "
+            "(The cascade's single agent-type gate per D3.4 §What is a gate; "
+            "realized as command-type Python in v0.2 per Child 0001-C.)"
+        ),
+        halt_codes=["§four-hat-incomplete", "§four-hat-objections-unresolved"],
+        recovery="/review <ticket> --continue, address each unresolved objection.",
+        evaluator=_eval_review_four_hat_objection_coverage,
+    ),
+    "review.ac-list-seal": GateSpec(
+        name="review.ac-list-seal", stage="review", trigger="at-write",
+        predicate_set="seal_sha256 recomputes against the spec's current AC list.",
+        halt_codes=["§four-hat-ac-list-drift"],
+        recovery="/specify <ticket> --unseal, re-seal, then re-run /review.",
+        evaluator=_eval_review_ac_list_seal,
+    ),
+
+    # /plan ───────────────────────────────────────────────────────────────────
+    "plan.provenance": GateSpec(
+        name="plan.provenance", stage="plan", trigger="pre-flight",
+        predicate_set=(
+            "Manifest chain to /review (or /specify when /review skipped); "
+            "ac_list_sha256 recomputes against four_hat_seal_sha256."
+        ),
+        halt_codes=["§provenance-chain-broken", "§ac-list-drift"],
+        recovery="--reconcile per D2.1 v2.1's chain-recovery pattern.",
+        evaluator=_eval_plan_provenance,
+    ),
+    "plan.decomposition-shape": GateSpec(
+        name="plan.decomposition-shape", stage="plan", trigger="at-write",
+        predicate_set=(
+            "D3.1: per-child decomposition entries valid; per-child Strategy field "
+            "populated; non-hybrid parent's children inherit parent strategy unless "
+            "an override finding flips them; hybrid parent's children carry explicit "
+            "non-inherited strategies."
+        ),
+        halt_codes=["§hybrid-without-child-overrides", "§plan-decomposition-invalid"],
+        recovery=(
+            "/plan <ticket> --rerun=decompose; if hybrid parent had no override "
+            "findings, consider re-sealing the parent as a non-hybrid strategy."
+        ),
+        evaluator=_eval_plan_decomposition_shape,
+    ),
+    "plan.child-inheritance": GateSpec(
+        name="plan.child-inheritance", stage="plan", trigger="at-write",
+        predicate_set=(
+            "Per-child failing_test_seed[] is a strict subset of parent's; per-child "
+            "pyramid_shape inherited from parent or overridden cleanly per D3.2; "
+            "per-child artifact_path / artifact_type / invariance_artifact fields "
+            "propagate per D3.3."
+        ),
+        halt_codes=["§child-seed-not-subset", "§child-shape-inheritance-broken"],
+        recovery="/plan <ticket> --rerun=decompose; fix the children's seed / shape.",
+        evaluator=_eval_plan_child_inheritance,
+    ),
+
+    # /update-linear ──────────────────────────────────────────────────────────
+    "update-linear.diff-applied": GateSpec(
+        name="update-linear.diff-applied", stage="update-linear", trigger="at-write",
+        predicate_set=(
+            "Each ticket's current Linear state matches diff_sha256; "
+            "Linear-sync sanity check passes per D2.1 v2 §Linear-sync."
+        ),
+        halt_codes=["§linear-state-inconsistent"],
+        recovery="/update-linear <ticket> --continue; investigate Linear-side drift.",
+        evaluator=_eval_update_linear_diff_applied,
+    ),
+
+    # /build ──────────────────────────────────────────────────────────────────
+    "build.provenance": GateSpec(
+        name="build.provenance", stage="build", trigger="pre-flight",
+        predicate_set=(
+            "Manifest chain to /plan or /update-linear; ac_list_sha256 chain to "
+            "/specify; four_hat_seal_sha256 chain to /review."
+        ),
+        halt_codes=[
+            "§provenance-chain-broken", "§ac-list-drift", "§four-hat-seal-broken",
+        ],
+        recovery="--reconcile per D2.1 v2.1's chain-recovery pattern.",
+        evaluator=_eval_build_provenance,
+    ),
+    "build.pyramid-tampering": GateSpec(
+        name="build.pyramid-tampering", stage="build", trigger="pre-flight",
+        predicate_set=(
+            "D3.2 §Downstream consumer touch-points: pyramid_shape and per-entry "
+            "tag from the spec markdown match the sealed manifest (no post-seal drift)."
+        ),
+        halt_codes=["§pyramid-tampering-detected"],
+        recovery="Restore the spec markdown to the sealed shape, or /specify --unseal.",
+        evaluator=_eval_build_pyramid_tampering,
+    ),
+    "build.test-execution": GateSpec(
+        name="build.test-execution", stage="build", trigger="per-iteration",
+        predicate_set=(
+            "Per Ralph iteration: tests in failing_test_seed[] run; outcomes "
+            "captured to backpressure_log; first-FAIL hash detects drift per D2.1 v2."
+        ),
+        halt_codes=["§build-test-drift"],
+        recovery="Investigate the diverging test failure; /build <ticket> --continue.",
+        evaluator=_eval_build_test_execution,
+    ),
+    "build.finalize": GateSpec(
+        name="build.finalize", stage="build", trigger="at-write",
+        predicate_set=(
+            "fix_plan_unchecked_count == 0; every test in failing_test_seed_status[] "
+            "recomputes to passing; commit exists in git; lock releases match "
+            "acquisitions per D2.1 v2 /build finalize row. "
+            "(Load-bearing: stop-orchestrator.sh dispatches `solo-verify build-finalize <ticket>`.)"
+        ),
+        halt_codes=["§build-finalize-incomplete"],
+        recovery="Continue /build until every fix-plan item is checked and seed tests pass.",
+        evaluator=_eval_build_finalize,
+    ),
+
+    # /wrap ───────────────────────────────────────────────────────────────────
+    "wrap.provenance": GateSpec(
+        name="wrap.provenance", stage="wrap", trigger="pre-flight",
+        predicate_set="Manifest chain to /build finalize.",
+        halt_codes=["§provenance-chain-broken"],
+        recovery="--reconcile per D2.1 v2.1's chain-recovery pattern.",
+        evaluator=_eval_wrap_provenance,
+    ),
+    "wrap.tests-green": GateSpec(
+        name="wrap.tests-green", stage="wrap", trigger="at-write",
+        predicate_set=(
+            "Red-tests-block predicate (v0.1 carry-forward under canonical AC-10 name): "
+            "every test in /build's failing_test_seed_status[] is `passing`."
+        ),
+        halt_codes=["§wrap-tests-red"],
+        recovery="Re-run /build to drive seed tests green; then re-run /wrap.",
+        evaluator=_eval_wrap_tests_green,
+    ),
+    "wrap.mirror-sha-match": GateSpec(
+        name="wrap.mirror-sha-match", stage="wrap", trigger="at-write",
+        predicate_set=(
+            "Filesystem docs/product/*.md sha matches Linear doc sha; per-resource "
+            "lock acquisitions match releases per D2.1 v2 /wrap row."
+        ),
+        halt_codes=["§product-doc-mirror-drift", "§wrap-lock-imbalance"],
+        recovery="Re-run /wrap to re-mirror docs from filesystem to Linear.",
+        evaluator=_eval_wrap_mirror_sha_match,
+    ),
+    "wrap.linear-state-updated": GateSpec(
+        name="wrap.linear-state-updated", stage="wrap", trigger="at-write",
+        predicate_set=(
+            "Linear ticket label is scope:built; ticket is in Done; "
+            "Linear-sync sanity passes."
+        ),
+        halt_codes=["§wrap-label-transition-failed"],
+        recovery="Re-run /wrap; investigate Linear API failures.",
+        evaluator=_eval_wrap_linear_state_updated,
+    ),
+
+    # /verify ─────────────────────────────────────────────────────────────────
+    "verify.provenance": GateSpec(
+        name="verify.provenance", stage="verify", trigger="pre-flight",
+        predicate_set=(
+            "Manifest chains to every child's /wrap; each child manifest readable."
+        ),
+        halt_codes=["§provenance-chain-broken"],
+        recovery="--reconcile per D2.1 v2.1's chain-recovery pattern.",
+        evaluator=_eval_verify_provenance,
+    ),
+    "verify.child-completion": GateSpec(
+        name="verify.child-completion", stage="verify", trigger="pre-flight",
+        predicate_set=(
+            "All children of the milestone have scope:built in Linear and a "
+            "complete /wrap manifest. (D2.1 v2 /verify row.)"
+        ),
+        halt_codes=["§verify-child-not-built"],
+        recovery="Complete /build and /wrap for each child first.",
+        evaluator=_eval_verify_child_completion,
+    ),
+    "verify.perceptual-evidence": GateSpec(
+        name="verify.perceptual-evidence", stage="verify", trigger="per-child",
+        predicate_set=(
+            "Walking-skeleton / capability-cluster: D3.3 P1, P2, P3 per "
+            "[perceptual] entry. Api-boundary: P1, P2, P3, P4 (transcript schema)."
+        ),
+        halt_codes=["§perceptual-evidence-missing"],
+        recovery=(
+            "Per sub-case: artifact-absent → /build child; regeneration-failed → "
+            "fix the test; byte-stability-failed → eliminate nondeterminism; "
+            "transcript-shape-violation → fix the markdown schema."
+        ),
+        evaluator=_eval_verify_perceptual_evidence,
+    ),
+    "verify.invariance": GateSpec(
+        name="verify.invariance", stage="verify", trigger="per-child",
+        predicate_set=(
+            "Refactor-spike: D3.3 P5–P9 (pass-set file present, sha integrity, "
+            "command integrity, re-capture, set-membership comparison)."
+        ),
+        halt_codes=[
+            "§invariance-pass-set-regression", "§invariance-config-missing",
+            "§invariance-seal-tampering", "§invariance-config-changed",
+        ],
+        recovery=(
+            "Per sub-case: regression → restore regressed tests or --unseal; "
+            "seal-tampering → restore from VCS; config-changed → restore command."
+        ),
+        evaluator=_eval_verify_invariance,
+    ),
+    "verify.milestone-aggregation": GateSpec(
+        name="verify.milestone-aggregation", stage="verify", trigger="at-write",
+        predicate_set=(
+            "Every child evaluated; per-child outcomes recorded to "
+            "children_gate_outcomes[]; no per-child gate halted."
+        ),
+        halt_codes=["§verify-milestone-aggregation-failed"],
+        recovery=(
+            "Address each per-child halt independently per its sub-card's "
+            "recommendation; re-run /verify <milestone>."
+        ),
+        evaluator=_eval_verify_milestone_aggregation,
+    ),
+
+    # /retro ──────────────────────────────────────────────────────────────────
+    "retro.doc-sealed": GateSpec(
+        name="retro.doc-sealed", stage="retro", trigger="at-write",
+        predicate_set=(
+            "Linear retro doc exists with sealed sha; Status doc lessons-line "
+            "updated. (D2.1 v2 /retro row.)"
+        ),
+        halt_codes=["§retro-doc-unsealed"],
+        recovery="Run /retro <milestone>.",
+        evaluator=_eval_retro_doc_sealed,
+    ),
+}
+
+
+# Per-stage gate firing order. The provenance gate fires first per D3.4
+# §Per-stage gate inventories; subsequent gates fire in declared order.
+STAGE_ORDER: dict[str, list[str]] = {
+    "onboard":       ["onboard.linear-projects", "onboard.config-write"],
+    "specify":       ["spec.provenance", "spec.ac-coverage", "spec.pyramid-shape",
+                      "spec.strategy-evidence", "spec.strategy-annotation"],
+    "review":        ["review.provenance", "review.four-hat-objection-coverage",
+                      "review.ac-list-seal"],
+    "plan":          ["plan.provenance", "plan.decomposition-shape",
+                      "plan.child-inheritance"],
+    "update-linear": ["update-linear.diff-applied"],
+    "build":         ["build.provenance", "build.pyramid-tampering",
+                      "build.test-execution", "build.finalize"],
+    "wrap":          ["wrap.provenance", "wrap.tests-green",
+                      "wrap.mirror-sha-match", "wrap.linear-state-updated"],
+    "verify":        ["verify.provenance", "verify.child-completion",
+                      "verify.perceptual-evidence", "verify.invariance",
+                      "verify.milestone-aggregation"],
+    "retro":         ["retro.doc-sealed"],
+}
+
+
+STAGES = list(STAGE_ORDER.keys())
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# §8  Halt card rendering — canonical D3.4 shape
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _render_halt_card(stage: str, ticket: str, gates: list[GateResult]) -> str:
+    """Aggregate per-D3.4 §Aggregation rules: primary halt = most-upstream
+    halted gate's first halt; other halts listed; recommendation from primary.
+    """
+    failing = [g for g in gates if not g.passed]
+    if not failing:
+        return ""
+    primary_gate = failing[0]   # first by firing order
+    primary_halt = primary_gate.halts[0]
+    other_halts: list[tuple[str, HaltCard]] = []
+    for g in failing:
+        for i, h in enumerate(g.halts):
+            if g is primary_gate and i == 0:
+                continue
+            other_halts.append((g.gate_name, h))
+
+    trigger_phrase = {
+        "pre-flight": "pre-flight",
+        "at-seal": "seal",
+        "at-write": "at-write",
+        "per-iteration": "iteration",
+        "per-child": "per-child",
+    }.get(primary_gate.trigger, primary_gate.trigger)
+
+    lines = [
+        f"HALT at /{stage} {trigger_phrase} for {ticket}",
+        "",
+        f"Primary: {primary_halt.full_code}",
+        f"  {primary_halt.summary}",
+    ]
+    if other_halts:
+        lines.append("")
+        lines.append("Other gates that halted at this stage:")
+        for gate_name, h in other_halts:
+            lines.append(f"  {gate_name}: {h.full_code}")
+            lines.append(f"    {h.summary}")
+    lines.append("")
+    lines.append("Recommendation:")
+    for rline in (primary_halt.recommendation or "").splitlines() or [""]:
+        lines.append(f"  {rline}")
+    if primary_halt.diagnostic_context:
+        lines.append("")
+        lines.append("Diagnostic context:")
+        for k, v in primary_halt.diagnostic_context.items():
+            lines.append(f"  {k}: {v}")
+    return "\n".join(lines)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# §9  Per-stage dispatch
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _run_stage(stage: str, ticket: str, single_gate: str | None = None) -> StageResult:
+    """Evaluate all gates for a stage in declared firing order.
+
+    When `single_gate` is non-None, evaluate only that gate name.
+    """
+    result = StageResult(stage=stage, ticket=ticket)
+    order = STAGE_ORDER.get(stage)
+    if order is None:
+        raise SystemExit(EXIT_USAGE)   # caller maps to usage halt; should be pre-checked
+    for gate_name in order:
+        if single_gate and gate_name != single_gate:
+            continue
+        spec = GATES[gate_name]
+        try:
+            gr = spec.evaluator(ticket=ticket)
+        except Exception as e:
+            # An evaluator crash is a v0.2 walking-skeleton concern; surface
+            # it as a halt rather than blowing up the CLI.
+            gr = _gr(gate_name, stage, spec.trigger, [HaltCard(
+                code="§evaluator-internal-error",
+                summary=f"{gate_name} evaluator raised: {type(e).__name__}: {e}",
+                recommendation=(
+                    "This is a solo-verify defect, not a cascade halt. Report "
+                    "to the framework repo with the diagnostic context below."
+                ),
+                diagnostic_context={
+                    "gate_name": gate_name, "exception": str(e),
+                    "ticket": ticket,
+                },
+            )])
+        result.gates.append(gr)
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# §10 --reconcile per-stage handlers (F-Rev-2 carry-forward)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _reconcile_stage(stage: str, ticket: str, yes: bool = False) -> int:
+    """Per-stage `--reconcile`: re-derive expected state from the upstream
+    manifest's outputs; report drift; offer interactive or `--yes`-batch repair.
+
+    F-Rev-2 carry-forward: v0.2 extends `--reconcile` to /onboard, /update-linear,
+    /review, /verify, /retro (v0.1 ships it on /specify, /plan, /build, /wrap).
+
+    v0.2 ships drift detection only; repair-on-confirm is a v0.2.x deliverable
+    per D4.5 §What v0.2 does not ship. This function prints the drift report
+    and the proposed repair, then exits 0 (no drift) or 1 (drift detected).
+    """
+    if stage not in STAGE_ORDER:
+        sys.stderr.write(f"solo-verify: unknown stage '{stage}'\n")
+        return EXIT_USAGE
+
+    print(f"--reconcile {stage} {ticket}")
+    print(f"(v0.2 walking-skeleton: drift detection only; repair is v0.2.x)")
+    print()
+
+    # Run the stage's gates to detect drift.
+    result = _run_stage(stage, ticket)
+    if result.passed:
+        print(f"✓ no drift detected at /{stage} for {ticket}")
+        return EXIT_PASS
+
+    print(f"✗ drift detected at /{stage} for {ticket}:")
+    print()
+    print(_render_halt_card(stage, ticket, result.gates))
+    print()
+    if yes:
+        print("--yes specified; repair would run here in v0.2.x. v0.2 exits with drift status.")
+    else:
+        print("Proposed repair actions (run with --yes to apply in v0.2.x):")
+        for g in result.gates:
+            if not g.passed:
+                for h in g.halts:
+                    rec = (h.recommendation or "").strip()
+                    if rec:
+                        print(f"  - [{g.gate_name}] {rec.splitlines()[0]}")
+    return EXIT_HALT
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# §11 --list-gates and --explain rendering
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _list_gates(stage_filter: str | None = None) -> str:
+    """Render gate inventory. `solo-verify --list-gates` prints all gates;
+    `solo-verify --list-gates <stage>` filters to one stage's gates.
+    """
+    lines: list[str] = []
+    stages = [stage_filter] if stage_filter else STAGES
+    for stage in stages:
+        if stage not in STAGE_ORDER:
+            return f"solo-verify: unknown stage '{stage}' (valid: {', '.join(STAGES)})"
+        lines.append(f"/{stage}:")
+        for gate_name in STAGE_ORDER[stage]:
+            spec = GATES[gate_name]
+            lines.append(f"  {gate_name}  [{spec.trigger}]")
+        lines.append("")
+    # Trailing blank line trimmed
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _explain_gate(stage_dot_gate: str) -> tuple[str, int]:
+    """Render gate's predicate text, halt codes, recovery. Returns (text, exit_code).
+    """
+    # Accept both "stage.gate-suffix" (canonical) and bare "gate-name" if unique.
+    spec: GateSpec | None = GATES.get(stage_dot_gate)
+    if spec is None:
+        # Try matching by name suffix
+        candidates = [g for g in GATES.values() if g.name == stage_dot_gate]
+        if len(candidates) == 1:
+            spec = candidates[0]
+    if spec is None:
+        return (
+            f"solo-verify: unknown gate '{stage_dot_gate}'. "
+            f"Run `solo-verify --list-gates` to see all gates.\n",
+            EXIT_USAGE,
+        )
+    lines = [
+        f"{spec.name}",
+        f"  Stage:     /{spec.stage}",
+        f"  Trigger:   {spec.trigger}",
+        "",
+        "  Predicate set:",
+    ]
+    for pline in _wrap(spec.predicate_set, width=76, indent="    "):
+        lines.append(pline)
+    lines.append("")
+    lines.append("  Halt codes:")
+    for h in spec.halt_codes:
+        lines.append(f"    {h}")
+    lines.append("")
+    lines.append("  Recovery:")
+    for pline in _wrap(spec.recovery, width=76, indent="    "):
+        lines.append(pline)
+    return "\n".join(lines) + "\n", EXIT_PASS
+
+
+def _wrap(text: str, width: int = 76, indent: str = "") -> list[str]:
+    """Minimal word-wrap (stdlib `textwrap` would be cleaner but this avoids
+    an import for one function)."""
+    words = text.split()
+    out: list[str] = []
+    current = indent
+    for w in words:
+        if len(current) + len(w) + 1 > width and current.strip():
+            out.append(current)
+            current = indent + w
+        else:
+            current = (current + " " + w) if current.strip() else (indent + w)
+    if current.strip():
+        out.append(current)
+    return out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# §12 main() + argparse
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="solo-verify",
+        description=(
+            "Gate evaluator for the Solo Claude Stack cascade. "
+            "Evaluates the D3.4 gate set against cascade manifests. "
+            "Single-file Python stdlib (3.10+, no external deps)."
+        ),
+        epilog=(
+            "Exit codes: 0=pass, 1=halt, 2=usage error, "
+            "3=provenance halt (run --reconcile), 4=fs/Linear inconsistent."
+        ),
+    )
+
+    # Top-level documentation flags
+    p.add_argument("--list-gates", nargs="?", const="__ALL__", metavar="STAGE",
+                   help="List gates (optionally filtered by stage).")
+    p.add_argument("--explain", metavar="STAGE.GATE-NAME",
+                   help="Explain a gate: predicate text, halts, recovery.")
+    p.add_argument("--version", action="version", version="solo-verify v0.2")
+
+    # Per-stage subcommands.
+    sub = p.add_subparsers(dest="command", metavar="STAGE")
+
+    # Standard per-stage commands
+    stage_command_argnames = {
+        "onboard":       "product",
+        "specify":       "ticket",
+        "review":        "ticket",
+        "plan":          "ticket",
+        "update-linear": "ticket",
+        "build":         "ticket",
+        "wrap":          "ticket",
+        "verify":        "milestone",
+        "retro":         "milestone",
+    }
+    for stage, argname in stage_command_argnames.items():
+        sp = sub.add_parser(stage, help=f"Evaluate gates at /{stage}")
+        sp.add_argument(argname.upper(), help=f"{argname} identifier")
+        sp.add_argument("--gate", metavar="GATE-NAME",
+                        help="Evaluate only the named gate.")
+        sp.add_argument("--reconcile", action="store_true",
+                        help="Re-derive expected state; report drift. F-Rev-2 carry-forward.")
+        sp.add_argument("--yes", action="store_true",
+                        help="With --reconcile: apply repair (v0.2.x — drift report only in v0.2).")
+        sp.add_argument("--json", action="store_true",
+                        help="Emit machine-readable JSON instead of human halt cards.")
+
+    # Hook-invocation aliases — D2.2 §Hook/script table forms
+    aliases = {
+        "subagent":       "agent_id",
+        "build-spawn":    "ticket",
+        "build-finalize": "ticket",
+        "milestone":      "id",
+    }
+    for cmd, argname in aliases.items():
+        sp = sub.add_parser(cmd, help=f"Hook-invocation form: solo-verify {cmd} <{argname}>")
+        sp.add_argument(argname.upper(), help=f"{argname} identifier")
+        sp.add_argument("--json", action="store_true", help="JSON output")
+
+    return p
+
+
+def _emit_result(stage: str, ticket: str, result: StageResult, as_json: bool) -> None:
+    if as_json:
+        payload = {
+            "stage": stage,
+            "ticket": ticket,
+            "passed": result.passed,
+            "exit_code": result.exit_code,
+            "gates": [
+                {
+                    "name": g.gate_name,
+                    "trigger": g.trigger,
+                    "passed": g.passed,
+                    "halts": [
+                        {
+                            "code": h.code,
+                            "sub_case": h.sub_case,
+                            "full_code": h.full_code,
+                            "summary": h.summary,
+                            "recommendation": h.recommendation,
+                            "diagnostic_context": h.diagnostic_context,
+                        }
+                        for h in g.halts
+                    ],
+                    "evidence": g.evidence,
+                }
+                for g in result.gates
+            ],
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        if result.passed:
+            evaluated = [g.gate_name for g in result.gates]
+            print(f"PASS at /{stage} for {ticket} — gates evaluated: {len(evaluated)}")
+            if not evaluated:
+                print("  (no gates evaluated; verify the stage / single-gate is correct)")
+        else:
+            print(_render_halt_card(stage, ticket, result.gates))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    # Documentation flags (--list-gates, --explain) take precedence over command.
+    if args.list_gates is not None:
+        stage_filter = None if args.list_gates == "__ALL__" else args.list_gates
+        print(_list_gates(stage_filter), end="")
+        return EXIT_PASS
+
+    if args.explain:
+        text, code = _explain_gate(args.explain)
+        sys.stdout.write(text)
+        return code
+
+    if args.command is None:
+        parser.print_usage()
+        sys.stderr.write("solo-verify: a stage (or --list-gates / --explain) is required.\n")
+        return EXIT_USAGE
+
+    # FS-inconsistency early check: if .cascade/manifests/ is absent for any
+    # command that needs it, return exit 4. Exempt --list-gates / --explain.
+    ok_fs, reason = _cascade_fs_ready()
+    if not ok_fs and args.command not in ("subagent", "build-spawn", "milestone"):
+        sys.stderr.write(
+            f"§cascade-fs-inconsistent: {reason}. "
+            f"Run /onboard to bootstrap, or solo-cascade resume per D4.6 v1.1 "
+            f"to re-derive state.\n"
+        )
+        return EXIT_FS_INCONSISTENT
+
+    cmd = args.command
+
+    # Hook-invocation aliases map to per-stage runs:
+    #   build-finalize → run /build, single-gate=build.finalize
+    #   build-spawn    → run /build, single-gate=build.provenance (pre-spawn check)
+    #   milestone      → run /verify
+    #   subagent       → run /review, single-gate=review.four-hat-objection-coverage
+    as_json = getattr(args, "json", False)
+    match cmd:
+        case "build-finalize":
+            ticket = args.TICKET
+            result = _run_stage("build", ticket, single_gate="build.finalize")
+            _emit_result("build", ticket, result, as_json)
+            return result.exit_code
+        case "build-spawn":
+            ticket = args.TICKET
+            result = _run_stage("build", ticket, single_gate="build.provenance")
+            _emit_result("build", ticket, result, as_json)
+            return result.exit_code
+        case "milestone":
+            mid = args.ID
+            result = _run_stage("verify", mid)
+            _emit_result("verify", mid, result, as_json)
+            return result.exit_code
+        case "subagent":
+            aid = args.AGENT_ID
+            # Derive the ticket from agent_id naming convention: <ticket>-<hat>.
+            # If the convention doesn't match, treat agent_id as ticket.
+            m = re.match(r"^(.+)-(user|engineer|pm|skeptic)$", aid)
+            ticket = m.group(1) if m else aid
+            result = _run_stage("review", ticket,
+                                 single_gate="review.four-hat-objection-coverage")
+            _emit_result("review", ticket, result, as_json)
+            return result.exit_code
+
+    # Standard per-stage path.
+    if cmd not in STAGE_ORDER:
+        sys.stderr.write(f"solo-verify: unknown stage '{cmd}'\n")
+        return EXIT_USAGE
+
+    # Resolve the ticket / milestone / product arg.
+    id_arg = (
+        getattr(args, "TICKET", None)
+        or getattr(args, "MILESTONE", None)
+        or getattr(args, "PRODUCT", None)
+        or getattr(args, "ID", None)
+    )
+    if id_arg is None:
+        sys.stderr.write(f"solo-verify: {cmd} requires an identifier.\n")
+        return EXIT_USAGE
+
+    # --reconcile per-stage handler
+    if getattr(args, "reconcile", False):
+        return _reconcile_stage(cmd, id_arg, yes=getattr(args, "yes", False))
+
+    # --gate <name>: validate the gate name
+    single_gate = getattr(args, "gate", None)
+    if single_gate is not None and single_gate not in GATES:
+        sys.stderr.write(
+            f"solo-verify: unknown gate '{single_gate}'. "
+            f"Run `solo-verify --list-gates {cmd}` to see gates for this stage.\n"
+        )
+        return EXIT_USAGE
+    if single_gate is not None and GATES[single_gate].stage != cmd:
+        sys.stderr.write(
+            f"solo-verify: gate '{single_gate}' belongs to /{GATES[single_gate].stage}, not /{cmd}.\n"
+        )
+        return EXIT_USAGE
+
+    result = _run_stage(cmd, id_arg, single_gate=single_gate)
+    _emit_result(cmd, id_arg, result, as_json)
+    return result.exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

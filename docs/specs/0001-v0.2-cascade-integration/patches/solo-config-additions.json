@@ -1,0 +1,10 @@
+{
+  "_comment_invariance": "Refactor-spike invariance predicate config. pass_set_capture_command is a shell command producing one passing-test ID per line on stdout, exiting 0 on success. Required for refactor-spike-strategy specs at /verify time; empty by default. See docs/.solo-config.example.json for per-runner examples. Per D3.3 §Refactor-spike invariance predicate.",
+  "invariance": {
+    "pass_set_capture_command": ""
+  },
+  "_comment_workflow": "Optional product-level workflow defaults. workflow.default_strategy seeds /specify step 1's strategy proposal; empty string means no product-level default. Slot ships in v0.2; behavioral wiring (/onboard step 7 writes the value; /specify step 1 reads it as the proposal seed) is deferred to Child 0001-B. Per D3.1 §/onboard product-level default; parent spec Open Question 4.",
+  "workflow": {
+    "default_strategy": ""
+  }
+}
