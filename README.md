@@ -108,6 +108,8 @@ The `curl … | bash` path above is the canonical entry; everything is wired aro
 
 - Claude.ai Pro (or higher) project with Linear + GitHub connectors at the project level.
 - Claude Code installed in your terminal.
+- **Python 3.10+** — `tools/solo-verify` uses `match` statements and will not parse on older interpreters (it fails fast with a clear message on <3.10 rather than a raw `SyntaxError`). CI pins 3.10 in `.github/workflows/ci.yml`.
+- `bash` 4+, `jq`, and `git` on `PATH` — the cascade hook lib (`.claude/hooks/lib/common.sh`) requires `jq` and `sha256sum` (it aliases `shasum -a 256` on macOS automatically).
 - `gh` CLI installed and authed (recommended; bootstrap uses it to create the GitHub remote without auto-init conflicts).
 - Linear free tier is sufficient; GitHub free repos are sufficient. The stack assumes a free-tier-first floor; no paid-tool dependency is introduced without a free-tier path.
 
