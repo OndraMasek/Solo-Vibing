@@ -105,6 +105,10 @@ git clone --depth 1 --branch "$TEMPLATE_BRANCH" --quiet "$TEMPLATE_REPO" "$tmp/t
 #   docs/discovery/               founder-instance state — empty in fresh forks
 #   docs/research/                founder-instance state
 #   docs/decisions/0*-*.md        upstream's ADRs; fork-specific decisions only
+#   docs/design                   upstream's framework design/research dossier (the
+#                                 D*.* docs); framework provenance, not a fork artifact.
+#                                 Only referenced by the already-excluded docs/specs,
+#                                 so excluding it leaves no dangling refs in a fork.
 #
 # In refresh mode, restrict to the template-bearing directories so we never
 # clobber founder-authored files.
@@ -121,6 +125,7 @@ excludes=(
   '--exclude=docs/discovery'
   '--exclude=docs/research'
   '--exclude=docs/decisions/0*-*.md'
+  '--exclude=docs/design'
 )
 
 if [[ "$mode" == "refresh" ]]; then
