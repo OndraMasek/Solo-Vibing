@@ -1,11 +1,11 @@
 ---
 name: onboard
-description: First-run interactive setup. Initializes a new Solo-Setup project — brownfield check, prereqs, upstream-content audit, Linear + GitHub MCP connections, GitHub remote, Linear API key, project marker, Linear team pick, six-project + Status-doc Linear product layer, north-star + design-system + placeholder-milestone seeding, optional product-level default strategy, Project Instructions paste-block render, and Group A chat-end card. Fires on "/onboard", "onboard", "set up project", "initialize", or on the first chat-Claude turn in an uninitialized repo (no docs/.solo-config.json). Manual override `/onboard --reinit <step>` re-runs a single step. Invokes the codebase-mapper agent at step 0 for brownfield repos.
+description: First-run interactive setup. Initializes a new Solo-Setup project — brownfield check, prereqs, upstream-content audit, Linear + GitHub MCP connections, GitHub remote, Linear API key, project marker, Linear team pick, plain-language workflow orientation with an optional HTML workflow map, six-project + Status-doc Linear product layer, north-star + design-system + placeholder-milestone seeding, optional product-level default strategy, Project Instructions paste-block render, and Group A chat-end card. Fires on "/onboard", "onboard", "set up project", "initialize", or on the first chat-Claude turn in an uninitialized repo (no docs/.solo-config.json). Manual override `/onboard --reinit <step>` re-runs a single step. Invokes the codebase-mapper agent at step 0 for brownfield repos.
 ---
 
 # onboard
 
-Interactive setup. Run once per new project, after cloning the Solo-Setup template into a fresh repo. Each step waits for founder response before advancing. References rules: `naming.md`, `scope-labels.md`, `completion-status.md`, `write-discipline.md`, `auditor-stance.md`. Invokes agent: `codebase-mapper` (step 0). Step 8 renders the Project Instructions paste-block per D2.3 v1.3 §`/onboard` integration point; step 9 renders the Group A chat-end card per the `/Chains` Pattern T contract.
+Interactive setup. Run once per new project, after cloning the Solo-Setup template into a fresh repo. Each step waits for founder response before advancing. References rules: `naming.md`, `scope-labels.md`, `completion-status.md`, `write-discipline.md`, `auditor-stance.md`. Invokes agent: `codebase-mapper` (step 0). A workflow-orientation step (between the pre-step gates and the numbered sequence) explains the cascade in plain language and offers to render an HTML workflow map. Step 8 renders the Project Instructions paste-block per D2.3 v1.3 §`/onboard` integration point; step 9 renders the Group A chat-end card per the `/Chains` Pattern T contract.
 
 ## Trigger
 
@@ -27,6 +27,20 @@ The pre-step gates (brownfield check, prereqs, connectors, GitHub remote, Linear
 - **Linear personal API key.** Founder pastes `LINEAR_API_KEY=...` into `.env`. Verify with `scripts/verify_linear_key.sh`. The key never enters chat. Verify `.env` is gitignored. Worktree warning surfaced if applicable.
 - **Project marker.** Ask the founder for the Linear project marker (default `SOL`); record under `marker` in the to-be-written `docs/.solo-config.json`. Surface the shared-Linear-teams clarification per `naming.md` §Shared Linear teams.
 - **Linear team pick.** Call `list_teams`. Single team → silent pick; multiple → `AskUserQuestion`. Record `linear.team_name` in the to-be-written config.
+
+### Workflow orientation
+
+Runs once, after the pre-step gates and before the numbered step sequence below. Re-runnable in isolation via `/onboard --reinit workflow-orientation`. This step does not write Linear or git; its only side effect is one optional local file.
+
+1. **Explain the cascade in plain language.** In chat, give the founder a short, jargon-light orientation: the project runs as a fixed **cascade** of stages — `/onboard` → `/discovery` → `/constitution` → `/specify` → `/plan` → `/review` → `/update-linear` → `/build` → `/wrap` → `/verify` → `/retro` — where each stage hands off to the next, mostly automatically. Name the one exception: `/build` never auto-fires (it spends real money and writes real code, so the go signal stays explicit). Then name the always-available founder-fired commands (`/start`, `/status`, `/next`, `/config`, `/map-codebase`, `/audit-self`). Keep it to a few sentences; the founder does not need the gate/manifest internals here.
+
+2. **Offer the HTML visualization.** Use `AskUserQuestion` to offer rendering a single-file visual map of the workflow the founder can open in a browser. Options: render it / skip.
+
+   On **render**: re-state the founder's authorization in the response (per Notes §AskUserQuestion re-statement, since this writes a file outside the templates directory), then render `docs/templates/onboarding/workflow-map.html.template` to `docs/onboarding/workflow-map.html`, substituting `<PRODUCT>` (the product name) and `<MARKER>` (the elicited marker). The template is self-contained (inline CSS, no network calls); tell the founder to open the file directly in a browser — no server needed. The file is a local reference only; it is not pushed to Linear or GitHub by the cascade.
+
+   On **skip**: proceed to step 1 below. The founder can render it later with `/onboard --reinit workflow-orientation`.
+
+The orientation is informational, not a gate — it never returns `BLOCKED`. A failed file render (filesystem error) surfaces as a one-line note and the skill proceeds; the map is a convenience, not a precondition.
 
 ### v0.2 `/onboard` step sequence
 
@@ -306,6 +320,7 @@ Per `write-discipline.md`:
 | Artifact | Location |
 | -- | -- |
 | Codebase map (brownfield only) | `docs/onboarding/codebase-map.md` (written by the `codebase-mapper` agent) |
+| Workflow visualization (optional) | `docs/onboarding/workflow-map.html` (rendered from `docs/templates/onboarding/workflow-map.html.template` at the workflow-orientation step; local-only) |
 | Workflow config | `docs/.solo-config.json` (with `marker`, `linear.team_name`, `linear.project_naming`, `workflow.default_strategy`, `invariance.*`) |
 | Project session instructions | `CLAUDE.md` (gitignored at upstream; tracked at fork) |
 | Founder-communication profile | `docs/product/founder-profile.md` (canonical; mirrored into the chat-instructions Communication profile section at step 8) |
@@ -375,6 +390,8 @@ Step 0's brownfield path invokes the `codebase-mapper` agent inline and returns 
 **CLAUDE.md scaffold is the template version, not the locked production version.** The founder edits it after onboard — project-specific principles, tool constraints, naming conventions. Constitution rules (including "Only /plan sets `scope:sealed`") live in `docs/constitution.md`, authored by `/constitution`, not in `CLAUDE.md`.
 
 **The steps are the minimum viable setup.** Steps that look optional (connectors verify, gitignore check, upstream content audit, GitHub remote check, worktree warning) exist because they're the most common silent-failure modes in fresh forks. Each maps to a specific failure observed in the Bomber-test report.
+
+**Workflow orientation is informational, not a gate.** It exists because a fresh founder needs a mental model of the cascade before the numbered steps start creating Linear structure — and a picture beats prose for a non-technical adopter. It runs after the pre-step gates so the product name and marker are known (both substitute into the rendered map). It never blocks: skip is a first-class option, the HTML is local-only (never pushed to Linear or GitHub), and a render failure degrades to a one-line note. Placed before the numbered sequence specifically to avoid renumbering the load-bearing steps 8 (Project Instructions paste) and 9 (chat-end card), whose numbers are referenced by the gate-evaluation and `/Chains` contracts.
 
 ## Open questions (deferred to v1.1+)
 
