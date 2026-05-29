@@ -110,14 +110,34 @@ sha256_string() {
 sha256_manifest_self_zeroed() {
   # sha256_manifest_self_zeroed <manifest-path>  → prints the sha256 the manifest
   # would carry if its own manifest_sha256 field were zeroed before hashing.
-  # This is the D2.1 v2 recomputation predicate.
+  # This is the D2.1 v2 §Caller-side-verification step-3 recomputation predicate.
+  #
+  # CANONICAL SERIALIZATION (SOL-119): the zeroed manifest is serialized as
+  #   json.dumps(data, sort_keys=True, separators=(",", ":"))   # ensure_ascii=True
+  # i.e. compact, key-sorted, ASCII-escaped, no trailing newline — byte-for-byte
+  # identical to tools/solo-verify's _sha256_manifest_self_zeroed. We delegate to
+  # python3 (a documented repo prereq — see tools/solo-verify and the four-hat
+  # hook) so the hook and the CLI share ONE serializer. A prior jq pipeline
+  # (`jq -S | sha256sum`) silently diverged: jq pretty-prints, drops trailing
+  # `.0` on floats, and emits raw UTF-8, none of which match python's json.dumps,
+  # so the same manifest hashed to different values under the hook vs the CLI.
   local path="$1"
   if [ ! -f "$path" ]; then
     echo "hook-lib: sha256_manifest_self_zeroed: manifest absent: $path" >&2
     return 1
   fi
-  # jq -S sorts keys for canonical form; .manifest_sha256 = "" zeros the field.
-  jq -S '.manifest_sha256 = ""' "$path" | sha256sum | awk '{print $1}'
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "hook-lib: sha256_manifest_self_zeroed requires python3 (canonical manifest serializer); not on PATH" >&2
+    return 1
+  fi
+  python3 -c '
+import json, hashlib, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+data["manifest_sha256"] = ""
+canonical = json.dumps(data, sort_keys=True, separators=(",", ":"))
+print(hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+' "$path"
 }
 
 # ---- Cascade state IO ------------------------------------------------------
