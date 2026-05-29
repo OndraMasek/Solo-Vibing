@@ -26,8 +26,8 @@
         ]
       },
       {
-        "matcher": "Write|Edit|MultiEdit",
-        "comment": "Cascade-control write denylist guard per spec AC-21 / D4.1 §D4.1.7. Reads patterns from .claude/agents/build-write-denylist.txt; halts on match with §cascade-control-write-blocked.",
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "comment": "Cascade-control write denylist guard per spec AC-21 / D4.1 §D4.1.7. Reads patterns from .claude/agents/build-write-denylist.txt; halts on match with §cascade-control-write-blocked. ENFORCES ONLY in build-agent context (env SOLO_BUILD_AGENT=1, set by Ralph's run.sh) — founder-session orchestration stages write cascade-control files unimpeded. The Bash arm closes the shell-redirection bypass (the build agent runs with --dangerously-skip-permissions); the hook inspects Bash write-targets only in build-agent context and soft-passes instantly otherwise.",
         "hooks": [
           {
             "type": "command",
