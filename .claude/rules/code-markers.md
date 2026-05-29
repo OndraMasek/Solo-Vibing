@@ -26,6 +26,8 @@ Markers go in source code (or markdown) as comments, single-line:
 // ☣️ Tainted: written against /plan manifest sha:abc12345 before it was marked is_tainted (reason: decomposition skipped the kill-handler). Run `solo-cascade --reconcile=plan SOL-12` before relying on this block.
 ```
 
+These glyphs live in source code and on the chat surface only. They are **never** written into Linear content — titles, descriptions, comments, labels, or documents — per `write-discipline.md` §No emoji or icons in Linear content. `/retro` surfaces marker counts in chat; it does not mirror the glyphs into the Linear retro doc.
+
 ## Lifecycle
 
 - **Add.** The producing skill writes the marker as part of the artifact it seals. Markers are first-class evidence; they are not a workaround.
