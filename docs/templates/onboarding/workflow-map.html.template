@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<!--
+  Solo-Setup workflow map — a single-file, plain-language picture of the cascade.
+  Rendered by /onboard (workflow-orientation step) to docs/onboarding/workflow-map.html
+  with <PRODUCT> and <MARKER> substituted. Self-contained: no external CSS, JS, fonts,
+  or network calls — open it directly in any browser, no server needed.
+  Regenerate any time with: /onboard --reinit workflow-orientation
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title><PRODUCT> — Solo-Setup workflow map</title>
+  <style>
+    :root {
+      --ink: #1a1d23;
+      --muted: #5c6470;
+      --line: #d7dbe0;
+      --bg: #f6f7f9;
+      --card: #ffffff;
+      --accent: #2f6f4f;
+      --accent-soft: #e7f1eb;
+      --gold: #8a6d1f;
+      --gold-soft: #f5efdd;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 2.5rem 1.25rem 4rem;
+      background: var(--bg);
+      color: var(--ink);
+      font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    .wrap { max-width: 860px; margin: 0 auto; }
+    header { margin-bottom: 2rem; }
+    h1 { font-size: 1.6rem; margin: 0 0 .35rem; }
+    .sub { color: var(--muted); margin: 0; }
+    h2 {
+      font-size: 1.05rem; text-transform: uppercase; letter-spacing: .06em;
+      color: var(--muted); margin: 2.5rem 0 1rem; font-weight: 600;
+    }
+    .flow { display: flex; flex-direction: column; gap: 0; }
+    .stage {
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      padding: .85rem 1.1rem; display: flex; gap: .9rem; align-items: baseline;
+    }
+    .stage .cmd {
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: .92rem; color: var(--accent); font-weight: 600;
+      min-width: 9.5rem; flex: 0 0 auto;
+    }
+    .stage .what { color: var(--ink); }
+    .stage .what em { color: var(--muted); font-style: normal; font-size: .9rem; display: block; margin-top: .15rem; }
+    .arrow { text-align: center; color: var(--line); font-size: 1.1rem; line-height: 1; margin: .25rem 0; user-select: none; }
+    .note {
+      background: var(--gold-soft); border: 1px solid #e5d9b0; border-radius: 8px;
+      padding: .65rem .9rem; color: var(--gold); font-size: .9rem; margin: .4rem 0;
+    }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: .75rem; }
+    .tool {
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: .75rem .9rem;
+    }
+    .tool .cmd { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--accent); font-weight: 600; font-size: .9rem; }
+    .tool .what { color: var(--muted); font-size: .88rem; margin-top: .2rem; }
+    footer { margin-top: 3rem; color: var(--muted); font-size: .82rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+    code { background: #eef0f3; padding: .05rem .3rem; border-radius: 4px; font-size: .85em; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1><PRODUCT> — Solo-Setup workflow map</h1>
+      <p class="sub">How work flows from idea to shipped, end to end. Marker: <code><MARKER></code>.</p>
+    </header>
+
+    <p>
+      Solo-Setup runs your project as a <strong>cascade</strong>: a fixed chain of stages, each one
+      handing off to the next. You drive it by typing the slash-commands below. Most stages flow
+      automatically once the one before them finishes; the only stage that waits for your explicit
+      go-ahead is <code>/build</code>, because it spends real money and writes real code.
+    </p>
+
+    <h2>The cascade — idea to shipped</h2>
+    <div class="flow">
+      <div class="stage"><span class="cmd">/onboard</span><span class="what">One-time setup.<em>Connects Linear + GitHub and creates your project's structure. You are here.</em></span></div>
+      <div class="arrow">&#8595;</div>
+      <div class="stage"><span class="cmd">/discovery</span><span class="what">Explore the problem.<em>Shapes and pressure-tests the idea before you commit to building anything.</em></span></div>
+      <div class="arrow">&#8595;</div>
+      <div class="stage"><span class="cmd">/constitution</span><span class="what">Set the ground rules.<em>Writes the project's governing principles that every later review checks against.</em></span></div>
+      <div class="arrow">&#8595;</div>
+      <div class="stage"><span class="cmd">/specify</span><span class="what">Write the spec.<em>Turns a feature idea into a sealed spec with clear, testable acceptance criteria.</em></span></div>
+      <div class="arrow">&#8595;</div>
+      <div class="stage"><span class="cmd">/plan</span><span class="what">Break it down.<em>Splits the spec into small child tickets, each one independently buildable.</em></span></div>
+      <div class="arrow">&#8595;</div>
+      <div class="stage"><span class="cmd">/review</span><span class="what">Challenge the plan.<em>A four-hat adversarial review of the spec before any code is written.</em></span></div>
+      <div class="arrow">&#8595;</div>
+      <div class="stage"><span class="cmd">/update-linear</span><span class="what">Sync to Linear.<em>Mirrors the planned work into Linear tickets you can track.</em></span></div>
+      <div class="arrow">&#8595;</div>
+      <div class="note">&#9888; <code>/build</code> does not start on its own — it waits for your go-ahead.</div>
+      <div class="stage"><span class="cmd">/build</span><span class="what">Build one ticket.<em>Runs the automated build loop against the failing tests, one child ticket at a time.</em></span></div>
+      <div class="arrow">&#8595;</div>
+      <div class="stage"><span class="cmd">/wrap</span><span class="what">Finish the ticket.<em>Confirms tests pass, commits the work, and marks the ticket done in Linear.</em></span></div>
+      <div class="arrow">&#8595;</div>
+      <div class="stage"><span class="cmd">/verify</span><span class="what">Check the milestone.<em>Verifies the evidence across all the child tickets in the milestone.</em></span></div>
+      <div class="arrow">&#8595;</div>
+      <div class="stage"><span class="cmd">/retro</span><span class="what">Capture lessons.<em>Records what was learned and closes the milestone.</em></span></div>
+    </div>
+
+    <h2>Commands you run any time</h2>
+    <div class="grid">
+      <div class="tool"><div class="cmd">/start</div><div class="what">Begin or resume work where you left off.</div></div>
+      <div class="tool"><div class="cmd">/status</div><div class="what">A 30-second read of where the project stands.</div></div>
+      <div class="tool"><div class="cmd">/next</div><div class="what">Pick the next thing to work on.</div></div>
+      <div class="tool"><div class="cmd">/config</div><div class="what">View or change workflow settings.</div></div>
+      <div class="tool"><div class="cmd">/map-codebase</div><div class="what">Generate a map of an existing codebase.</div></div>
+      <div class="tool"><div class="cmd">/audit-self</div><div class="what">Have the workflow audit its own state.</div></div>
+    </div>
+
+    <footer>
+      Generated by <code>/onboard</code> for <strong><PRODUCT></strong>. This file is a local
+      reference — it is not pushed to Linear or GitHub by the cascade. Regenerate it any time with
+      <code>/onboard --reinit workflow-orientation</code>.
+    </footer>
+  </div>
+</body>
+</html>
