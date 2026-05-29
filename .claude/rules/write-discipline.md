@@ -18,6 +18,22 @@ A skill writes its own outputs only. Cascade-downstream skills get their own tur
 
 When the API forces separate calls (e.g. document create followed by document update), they still batch within the same turn.
 
+## No emoji or icons in Linear content
+
+Linear content is plain text and markdown only — no emoji, no icon glyphs. This covers every Linear write surface: ticket titles, descriptions, comments, label names, and document bodies (including the Status doc and all `[<MARKER>-DOC-NNNN]` documents).
+
+The Linear write path rejects content carrying icon glyphs; a skill that decorates a title or a status line with an emoji (`✅`, `🚀`, `→`, header icons, `✓`/`✗`) gets the write rejected and the same-turn batch fails partway, halting the cascade per §Partial failure. Decoration is never worth a stalled write.
+
+Use words, not glyphs, wherever a skill is tempted to signal state in Linear:
+
+- Pass/fail: `pass` / `fail`, not `✓` / `✗`.
+- Gate or milestone status in the Status doc: `pending` / `pass` / `fail` / `blocked` — plain tokens.
+- Sequence or flow: `then` / `next:`, not `→`.
+
+Applies to every Linear-writing skill (`/onboard`, `/discovery`, `/constitution`, `/specify`, `/review`, `/update-linear`, `/plan`, `/wrap`, `/verify`, `/retro`) and the chat-summary renderer absorbed into `/update-linear`. Titles in particular: the `[<MARKER>] <verb-noun>` form in `naming.md` is plain text — no leading icon.
+
+The `🤔` / `📝` / `☣️` code markers (`code-markers.md`) are **not** an exception: they live in source code and on the chat surface only. `/retro` reports their counts in chat; it never mirrors the glyphs into a Linear retro doc.
+
 ## Read-before-write
 
 When updating an existing Linear artifact, fetch its current state in the same turn as the planned write. If observed state contradicts the skill's precondition (label drifted, content edited since the cascade started), abort the write and surface `BLOCKED` per `completion-status.md`.
