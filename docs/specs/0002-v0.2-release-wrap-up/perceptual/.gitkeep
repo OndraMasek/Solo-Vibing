@@ -1,0 +1,4 @@
+# Perceptual evidence for 0002-v0.2-release-wrap-up. Sealed by Code at /build's at-write trigger:
+#   0002-A → onboard-dry-run.txt   (two-run byte-stable /onboard --dry-run capture; AC-4)
+#   0002-B → linear-tickets-created.json   (canonicalized Linear API response for the 4 ticket creations; AC-5..AC-8)
+# Do not hand-author these artifacts — fabricated perceptual evidence defeats the verify gate.
