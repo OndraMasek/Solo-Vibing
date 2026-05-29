@@ -1,0 +1,42 @@
+[
+  {
+    "id": "SOL-108",
+    "identifier": "SOL-108",
+    "labels": [
+      "v0.2.x"
+    ],
+    "projectId": "028e28f9-8e4b-4834-84f7-9488f4502f53",
+    "title": "v0.2.x — PreCompact output shape validation against Claude Code v2.0.76+",
+    "url": "https://linear.app/test-docs-generator/issue/SOL-108/v02x-precompact-output-shape-validation-against-claude-code-v2076"
+  },
+  {
+    "id": "SOL-109",
+    "identifier": "SOL-109",
+    "labels": [
+      "v0.2.x"
+    ],
+    "projectId": "028e28f9-8e4b-4834-84f7-9488f4502f53",
+    "title": "v0.2.x — PRIMING_MARKERS validation against /review priming text",
+    "url": "https://linear.app/test-docs-generator/issue/SOL-109/v02x-priming-markers-validation-against-review-priming-text"
+  },
+  {
+    "id": "SOL-110",
+    "identifier": "SOL-110",
+    "labels": [
+      "v0.2.x"
+    ],
+    "projectId": "028e28f9-8e4b-4834-84f7-9488f4502f53",
+    "title": "v0.2.x — MultiEdit handling in pyramid-tampering.sh",
+    "url": "https://linear.app/test-docs-generator/issue/SOL-110/v02x-multiedit-handling-in-pyramid-tamperingsh"
+  },
+  {
+    "id": "SOL-111",
+    "identifier": "SOL-111",
+    "labels": [
+      "v0.2.x"
+    ],
+    "projectId": "028e28f9-8e4b-4834-84f7-9488f4502f53",
+    "title": "v0.2.x — D2.1 v2 AC-hash regex permissiveness confirmation",
+    "url": "https://linear.app/test-docs-generator/issue/SOL-111/v02x-d21-v2-ac-hash-regex-permissiveness-confirmation"
+  }
+]
