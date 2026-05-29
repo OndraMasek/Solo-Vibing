@@ -59,3 +59,30 @@ And the following should be the only canonical reference:
 - `\.cascade/run-state\.json` at repo root — the v2.1+ canonical path
 
 The 0001 integration spec's executing session should run these greps as a pre-flight sanity check before authoring any code that touches `cascade:run-state`.
+
+## Canonical manifest serialization — §Caller-side verification step 3 (SOL-119 amendment)
+
+Step 3 of the caller-side verification protocol recomputes a manifest's checksum
+with its own `manifest_sha256` field zeroed. The serialization used for that hash
+is **canonical and singular**:
+
+```
+json.dumps(data, sort_keys=True, separators=(",", ":"))   # ensure_ascii=True; UTF-8; no trailing newline
+```
+
+— compact (no inter-token whitespace), key-sorted, non-ASCII escaped to `\uXXXX`,
+no trailing newline. The sha256 is taken over the UTF-8 bytes of that string.
+
+Both consumers of the predicate MUST produce byte-identical output:
+
+- `tools/solo-verify` `_sha256_manifest_self_zeroed` — the reference implementation.
+- `.claude/hooks/lib/common.sh` `sha256_manifest_self_zeroed` (the substrate behind
+  `preflight-provenance.sh`) — delegates to `python3` so it shares the reference
+  serializer exactly.
+
+A `jq`-based pipeline is **not** an acceptable implementation: `jq` pretty-prints,
+drops a trailing `.0` on whole-valued floats, and emits raw UTF-8 — none of which
+match `json.dumps`. The original v0.2 hook used `jq -S | sha256sum` and silently
+diverged from the CLI, so a manifest hashed to different values under the gate hook
+vs the verifier. SOL-117 (the first real provenance-root seal) surfaced it; SOL-119
+fixed it and added `tests/provenance-sha-parity/` to assert the two stay byte-equal.

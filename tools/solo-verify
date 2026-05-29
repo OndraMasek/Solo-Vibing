@@ -251,6 +251,14 @@ def _sha256_manifest_self_zeroed(path: Path) -> str:
     """Recompute manifest sha with `manifest_sha256` field zeroed.
 
     Implements D2.1 v2 §Caller-side verification step 3.
+
+    CANONICAL SERIALIZATION (SOL-119): the zeroed manifest is serialized as
+    `json.dumps(data, sort_keys=True, separators=(",", ":"))` — compact,
+    key-sorted, ASCII-escaped (ensure_ascii default), no trailing newline.
+    This is THE canonical form; the bash hook substrate
+    (`.claude/hooks/lib/common.sh` `sha256_manifest_self_zeroed`) delegates to
+    python3 to produce byte-identical output, so the UserPromptSubmit gate and
+    this CLI never disagree on a manifest's sha.
     """
     raw = path.read_text(encoding="utf-8")
     data = json.loads(raw)
