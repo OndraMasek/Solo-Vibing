@@ -1073,3 +1073,323 @@ catches the violation at seal time.
 **Alternatives.** None — inconsistent state must be repaired before evaluation can proceed. The evaluator's refusal here is load-bearing: silently passing a gate whose evidence the evaluator can't read would propagate the inconsistency.
 
 <!-- END v0.2 Child 0001-D halt cards -->
+
+<!-- BEGIN SOL-121 audit-gap halt cards (23 referenced-but-undefined codes; 2026-05-29 audit) -->
+
+### §ac-list-drift
+
+**When:** `solo-verify`'s AC-list chain check found the spec's current AC-list `sha256` differs from the value sealed in the upstream manifest's `ac_list_sha256`, or the spec file the chain references is absent.
+
+**Recommendation:** `/specify <MARKER>-N --unseal` to re-seal against the current AC list, then re-fire the cascade from the unseal point.
+**Rationale:** Every downstream stage chains against the sealed AC list; a changed list means work proceeds against an unreviewed spec.
+
+**Alternatives:**
+1. `git checkout <sealed-commit> -- docs/specs/NNNN-<slug>/spec.md` — restore the sealed text if the AC edit was accidental; preserves the chain.
+2. Restore the spec from VCS if it was deleted — the chain cannot verify against an absent file.
+
+**Diagnostic context:** spec path; sealed sha256 vs current sha256; ticket. solo-verify exits 2 (provenance).
+
+---
+
+### §four-hat-seal-broken
+
+**When:** At `/build` pre-flight, the spec's current AC-list sha differs from `/review`'s `four_hat_seal_sha256` — the four-hat seal no longer covers the spec being built.
+
+**Recommendation:** `/specify <MARKER>-N --unseal`, then re-run `/review` and `/plan`.
+**Rationale:** Building against a spec whose AC list drifted past the four-hat seal builds unreviewed scope.
+
+**Alternatives:**
+1. Restore the spec to the four-hat-sealed version from VCS — preserves the seal if the edit was accidental.
+
+**Diagnostic context:** spec path; `four_hat_seal_sha256` vs current AC sha; ticket. solo-verify exits 2 (provenance).
+
+---
+
+### §onboard-linear-init-failed
+
+**When:** The `onboard.linear-projects` gate found no `/onboard` manifest, fewer than the six required Linear projects (Product / Architecture / Design / Milestones / Backlog / Done), or a missing Status doc.
+
+**Recommendation:** `/onboard <product>` to bootstrap the Linear projects.
+**Rationale:** The cascade's Linear product layer (D1) is a precondition for every downstream stage that mirrors to Linear.
+
+**Alternatives:**
+1. Verify the Linear API key has create-project permission and the team has space for six projects, then re-run `/onboard`.
+
+**Diagnostic context:** projects-created count vs required six; `status_doc_id` presence; ticket.
+
+---
+
+### §onboard-config-write-failed
+
+**When:** The `onboard.config-write` gate found `docs/.solo-config.json` absent, non-parsing, missing `marker`, missing the `workflow.default_strategy` slot (or carrying a value outside the strategy enum), or missing the `invariance` top-level key.
+
+**Recommendation:** `/onboard <product>` to (re)write the config, or hand-edit `docs/.solo-config.json` to add the missing field.
+**Rationale:** Skills read marker, strategy default, and invariance config from this file; a malformed config halts the cascade at the first stage that reads it.
+
+**Alternatives:**
+1. Hand-add the single missing field (e.g. `"invariance": {"pass_set_capture_command": ""}`) if only one predicate failed — faster than a full re-onboard.
+
+**Diagnostic context:** config path; failing predicate (absent / unparseable / missing-marker / missing-default_strategy / invalid-strategy-value / missing-invariance); offending value verbatim; ticket.
+
+---
+
+### §four-hat-incomplete
+
+**When:** The `review.four-hat-objection-coverage` gate found no `/review` manifest, a missing per-hat manifest (user / engineer / pm / skeptic), or a manifest lacking `unresolved_count`.
+
+**Recommendation:** `/review <MARKER>-N` (or `/review --continue` to re-dispatch a missing hat).
+**Rationale:** The four-hat panel is the spec's adversarial review; an incomplete panel means the spec was not fully challenged before build.
+
+**Alternatives:**
+1. `/review --continue` to re-dispatch only the absent hat — cheaper than a full re-review.
+
+**Diagnostic context:** ticket; missing hat name (sub-case `transcript-absent`) or missing field (sub-case `objections-section-missing`).
+
+---
+
+### §four-hat-objections-unresolved
+
+**When:** The `/review` manifest reports `unresolved_count > 0` — four-hat objections remain without Incorporate / Defer / Reject resolutions.
+
+**Recommendation:** Address each unresolved objection in the four-hat doc, then `/review --continue`.
+**Rationale:** `/build` and `/plan` require all findings resolved; sealing with open objections buries known disagreements.
+
+**Alternatives:**
+1. `/specify <MARKER>-N --unseal` — if the unresolved objections indicate fundamental rework rather than line edits.
+
+**Diagnostic context:** `unresolved_count`; ticket; four-hat doc slug.
+
+---
+
+### §four-hat-ac-list-drift
+
+**When:** The `review.ac-list-seal` gate found the spec's current AC-list sha differs from the `/review` manifest's `seal_sha256`, or the spec file is absent.
+
+**Recommendation:** `/specify <MARKER>-N --unseal`, then re-run `/review`.
+**Rationale:** The review seal certifies a specific AC list; drift past it invalidates the review.
+
+**Alternatives:**
+1. Restore the spec to the review-sealed version from VCS — preserves the seal if the edit was accidental.
+
+**Diagnostic context:** spec path; sealed sha vs current sha; ticket. solo-verify exits 2 (provenance).
+
+---
+
+### §plan-decomposition-invalid
+
+**When:** The `plan.decomposition-shape` gate found no `/plan` manifest, or a manifest naming zero children.
+
+**Recommendation:** `/plan <MARKER>-N`; the decomposer must emit at least one child.
+**Rationale:** A decomposition with no children is not a plan; downstream `/build` has nothing to fire against.
+
+**Alternatives:**
+1. `/specify <MARKER>-N --unseal` — if the parent is genuinely a single indivisible unit of work (rare; usually a re-plan suffices).
+
+**Diagnostic context:** ticket; child count; parent strategy.
+
+---
+
+### §linear-state-inconsistent
+
+**When:** The `update-linear.diff-applied` gate found no `/update-linear` manifest, or a manifest lacking `diff_sha256` or `tickets_updated[]`.
+
+**Recommendation:** `/update-linear <MARKER>-N`.
+**Rationale:** Without a recorded diff and ticket-update set, the cascade cannot confirm Linear reflects the planned state.
+
+**Alternatives:** None — re-running `/update-linear` is the sanctioned path; the Linear-side reconciliation lives in the skill.
+
+**Diagnostic context:** ticket; missing field (`diff_sha256` / `tickets_updated`).
+
+---
+
+### §pyramid-tampering-detected
+
+**When:** The `build.pyramid-tampering` gate found the spec markdown's `**Pyramid shape:**` declaration names a different strategy than the sealed manifest's `pyramid_shape.strategy`.
+
+**Recommendation:** Restore the spec markdown to the sealed shape, or `/specify <MARKER>-N --unseal`.
+**Rationale:** The pyramid shape is sealed at `/specify`; a post-seal change to the strategy declaration mutates the test-coverage contract `/build` runs against.
+
+**Alternatives:**
+1. Restore only the `**Pyramid shape:**` line if the strategy change was unintentional — preserves the seal.
+2. `/specify <MARKER>-N --unseal` if the strategy genuinely changed — regenerates `pyramid_shape` from the D3.2 catalog.
+
+**Diagnostic context:** claimed strategy vs sealed strategy; spec path; ticket.
+
+---
+
+### §build-test-drift
+
+**When:** The `build.test-execution` gate found the latest backpressure entry reports `first_fail_hash_changed`, or the backpressure log is unreadable.
+
+**Recommendation:** Investigate the diverging test failure, then `/build <MARKER>-N-K --continue`.
+**Rationale:** The failing-test seed is the build invariant; a changed first-FAIL hash means the test or implementation drifted off the seed contract.
+
+**Alternatives:**
+1. Inspect `.ralph/<MARKER>-N-K/backpressure.jsonl` directly if the log is merely unreadable rather than corrupt.
+
+**Diagnostic context:** last backpressure entry; ticket; backpressure log path.
+
+---
+
+### §build-finalize-incomplete
+
+**When:** The `build.finalize` gate found no backpressure log, `fix_plan_unchecked_count != 0`, one or more seed tests not `passing`, a missing `commit_sha`, or a commit SHA absent from git's object store.
+
+**Recommendation:** `/build <MARKER>-N-K --continue` until every fix-plan item is checked, all seed tests pass, and the work is committed.
+**Rationale:** Finalize is the build's completion contract; an unmet predicate means the child is not built.
+
+**Alternatives:**
+1. Verify the build commit was not rebased away if `commit_sha` is recorded but absent from the object store.
+
+**Diagnostic context:** failing predicate (no-log / unchecked-fix-plan / seed-not-passing / no-commit / commit-missing); unchecked count or not-passing sample; commit sha; ticket.
+
+---
+
+### §product-doc-mirror-drift
+
+**When:** The `wrap.mirror-sha-match` gate found the filesystem `docs/product/*.md` sha differs from the Linear doc sha.
+
+**Recommendation:** Re-run `/wrap <MARKER>-N-K` to re-mirror docs from filesystem to Linear.
+**Rationale:** The filesystem is canonical for product docs; a sha mismatch means Linear is stale.
+
+**Alternatives:** None — re-mirroring via `/wrap` is the sanctioned reconciliation.
+
+**Diagnostic context:** fs sha vs Linear sha; ticket.
+
+---
+
+### §wrap-label-transition-failed
+
+**When:** The `wrap.linear-state-updated` gate found `linear_label_transition != "scope:built"` or the ticket was not moved to the Done project. Emitted from two call sites in `solo-verify` (the per-predicate halt and the gate-spec dispatch).
+
+**Recommendation:** Re-run `/wrap <MARKER>-N-K`; investigate Linear API failures.
+**Rationale:** `scope:built` plus Done placement is the child's terminal Linear state; a failed transition leaves the cascade's Linear view inconsistent with completed work and blocks `/verify`'s child-completion check.
+
+**Alternatives:**
+1. Edit the ticket label and project in Linear directly if the API write failed transiently — then re-run `/wrap` to re-seal the manifest.
+
+**Diagnostic context:** actual label vs expected `scope:built`; `done_project_id` presence; ticket.
+
+---
+
+### §verify-child-not-built
+
+**When:** The `verify.child-completion` gate found a child with no `/wrap` manifest, or a child not labeled `scope:built`.
+
+**Recommendation:** Complete `/build` then `/wrap` for the named child, then re-run `/verify <milestone>`.
+**Rationale:** Milestone verification aggregates per-child evidence; an unbuilt child has no evidence to aggregate.
+
+**Alternatives:** None — every child of the milestone must complete `/wrap` before `/verify` can evaluate.
+
+**Diagnostic context:** child ticket; milestone; actual label (if present).
+
+---
+
+### §hybrid-nesting-too-deep
+
+**When:** `/verify`'s per-child dispatch encountered a hybrid child at recursion depth ≥ 1 — v0.2 caps hybrid nesting at one level per D3.4 §`/verify` dispatch.
+
+**Recommendation:** Flatten the nesting so no hybrid child contains another hybrid child; or defer the deeper split to v0.2.x.
+**Rationale:** Deeper-than-one hybrid recursion has no defined gate-composition path in v0.2; the cap is a deliberate scope boundary.
+
+**Alternatives:**
+1. Re-`/specify` the offending child under a concrete (non-hybrid) strategy if its work fits one.
+
+**Diagnostic context:** child ticket; recursion depth; milestone.
+
+---
+
+### §retro-doc-unsealed
+
+**When:** The `retro.doc-sealed` gate found no `/retro` manifest, or a manifest lacking `lessons_summary_line`.
+
+**Recommendation:** `/retro <milestone>` (idempotent — re-running renders the same content if the input `/verify` manifest is unchanged).
+**Rationale:** The retro doc and its Status-doc lessons line are the milestone's durable record; an unsealed retro leaves the cascade's terminal stage incomplete.
+
+**Alternatives:** None — `/retro` is the sole producer of the retro doc.
+
+**Diagnostic context:** milestone; missing artifact (manifest / `lessons_summary_line`).
+
+---
+
+### §child-seed-not-subset
+
+**When:** The `plan.child-inheritance` gate determined a child's `failing_test_seed[]` is not a strict subset of the parent's seed. The deep subset check fires inside the `/plan` skill at write time; the gate reserves this code.
+
+**Recommendation:** `/plan <MARKER>-N --rerun=decompose`; fix the offending child's seed so it draws only from the parent's seed.
+**Rationale:** A child seed that introduces tests absent from the parent's seed builds scope the parent spec never sealed.
+
+**Alternatives:**
+1. `/specify <MARKER>-N --unseal` if the parent seed itself is missing a test the child legitimately needs — add it at the parent, then re-decompose.
+
+**Diagnostic context:** child ticket; offending seed entries (present in child, absent from parent); parent ticket.
+
+---
+
+### §child-shape-inheritance-broken
+
+**When:** The `plan.child-inheritance` gate determined a child's `pyramid_shape` was neither inherited from the parent nor overridden cleanly per D3.2, or its `artifact_path` / `artifact_type` / invariance fields did not propagate per D3.3. The deep check fires inside the `/plan` skill at write time; the gate reserves this code.
+
+**Recommendation:** `/plan <MARKER>-N --rerun=decompose`; fix the child's shape and artifact fields.
+**Rationale:** Per-child gate composition depends on a well-formed inherited or overridden shape; a broken inheritance leaves the child unverifiable at `/verify`.
+
+**Alternatives:** None — re-decompose is the sanctioned repair.
+
+**Diagnostic context:** child ticket; broken field (`pyramid_shape` / `artifact_path` / `artifact_type` / `invariance_artifact`); parent ticket.
+
+---
+
+### §wrap-lock-imbalance
+
+**When:** The `wrap.mirror-sha-match` gate's predicate set found per-resource lock acquisitions did not match releases for the `/wrap` run (per D2.1 v2 /wrap row). Lock-balance accounting fires inside the `/wrap` skill; the gate reserves this code.
+
+**Recommendation:** Re-run `/wrap <MARKER>-N-K`; inspect `.solo-locks/` for a stale lock left by an interrupted run.
+**Rationale:** An unbalanced lock means a resource the wrap acquired was never released — concurrent same-product stages can deadlock against it.
+
+**Alternatives:**
+1. Remove the stale lock file under `.solo-locks/` manually if no live process holds it, then re-run `/wrap`.
+
+**Diagnostic context:** ticket; acquired-vs-released lock counts; offending resource path under `.solo-locks/`.
+
+---
+
+### §cascade-control-write-blocked
+
+**When:** A `Write` / `Edit` / `MultiEdit` tool call targeted a path matching a pattern in `.claude/agents/build-write-denylist.txt`. The `pretool-write-denylist.sh` PreToolUse hook denied the call (per D4.1.7 / spec AC-21).
+
+**Recommendation:** Edit the file manually outside the cascade, or invoke the skill that has authority to write it.
+**Rationale:** Cascade-control files (config, rules, halt-messages, `.cascade/*`, `.solo-locks/*`) are load-bearing; a build agent must not grow its own write surface. The denylist is itself denylisted.
+
+**Alternatives:**
+1. If a skill legitimately needs to write the path, route the change through that skill rather than the build agent.
+
+**Diagnostic context:** attempted relative path; matched denylist pattern; denylist file path (`.claude/agents/build-write-denylist.txt`).
+
+---
+
+### §cascade-state-terminal
+
+**When:** `solo-cascade resume` (D4.6 v1.1) was invoked after the cascade reached its terminal stage (Group H / `/retro`); there is no next group beyond H. Surfaced from `.claude/skills/retro/SKILL.md`'s Group H exit.
+
+**Recommendation:** Open a new spec via `/specify` in a new chat to begin the next feature.
+**Rationale:** The cascade terminates at `/retro`; resume has nothing to re-derive past the terminal manifest.
+
+**Alternatives:** None — the terminal is intentional; the next action is a new feature, not a resume.
+
+**Diagnostic context:** milestone; `last_completed_group = "H"`; terminal retro manifest path (`.cascade/manifests/<milestone>-retro.json`).
+
+---
+
+### §verify-strategy-unrecognized
+
+**When:** `/verify`'s per-child dispatch encountered a child whose strategy is outside the canonical enum `{walking-skeleton, api-boundary, capability-cluster, refactor-spike, hybrid}`. A defensive halt — upstream `/specify`'s `spec.strategy-annotation` gate should have caught it.
+
+**Recommendation:** `/specify <child-ticket> --unseal`, set a strategy from the canonical enum, re-seal, then re-run `/verify <milestone>`.
+**Rationale:** Gate dispatch selects predicates by strategy; an unrecognized strategy has no dispatch path.
+
+**Alternatives:**
+1. uncertain: if the strategy value looks corrupted rather than wrong, inspect the child's `/specify` manifest for a write error before re-specifying — `solo-verify <child> --gate spec.strategy-annotation` confirms.
+
+**Diagnostic context:** child ticket; offending strategy value verbatim; milestone.
+
+<!-- END SOL-121 audit-gap halt cards -->
