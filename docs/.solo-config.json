@@ -9,6 +9,7 @@
     "verify": true,
     "auto_retro": true,
     "followup_tickets": true,
+    "discovery_surface": "chat",
     "default_strategy": ""
   },
   "ralph": {
