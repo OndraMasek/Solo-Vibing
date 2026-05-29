@@ -2,9 +2,22 @@
 
 > An opinionated workflow stack for solo founders / vibe coders using Claude.ai (chat) + Claude Code (terminal) + Linear + GitHub.
 
-**Status:** v0.1 in active development (target ship: end of May / early June 2026).
+**Status:** v0.2 cascade primitives integrated and self-applied; v0.2.x cycle open. _(v0.1 shipped the skill chain; v0.2 layered cascade enforcement on top — see below.)_
 
 Solo-Setup packages a complete solo-founder workflow — heavyweight specs, four-hat adversarial review, cascade orchestration, and a Ralph-style automation loop — into a forkable template. The deliverable is the repo itself, not a service: a competent technical person should be able to fork it and adopt the whole pipeline in under an hour.
+
+## What's new in v0.2
+
+v0.2 layers cascade enforcement on top of the v0.1 skill chain, and the framework now self-applies it:
+
+- **Cascade gates** — named halt-gates at each stage's at-write boundary; inventory via `python3 tools/solo-verify --list-gates`, copy in `docs/templates/halt-messages.md`.
+- **Decomposition strategies** — `/specify` proposes one of five strategies (`walking-skeleton`, `api-boundary`, `capability-cluster`, `refactor-spike`, `hybrid`) that drives the test pyramid and gate composition.
+- **Hooks** — eight hook scripts wired in `.claude/settings.json` (provenance pre-flight, pyramid-tampering guard, four-hat coverage, stop-orchestrator, session start/end, pre-compact boundary, write denylist).
+- **`solo-verify` CLI** — per-stage / per-gate verification at `tools/solo-verify`.
+- **Tainted state + code markers** — manifest taint tracking and `🤔 / 📝 / ☣️` in-code markers (`.claude/rules/code-markers.md`).
+- **CI** — GitHub Actions at `.github/workflows/ci.yml`.
+
+See [`CLAUDE.md` §v0.2 cascade primitives](./CLAUDE.md) for the session-layer reference.
 
 ## What's in here
 

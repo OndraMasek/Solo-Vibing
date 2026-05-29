@@ -28,7 +28,7 @@ The six always-on conventions are imported below. Claude Code also auto-loads ev
 
 ## Workflow — the Solo-Setup cascade
 
-Skill chain (each stage Task-invokes the next per its own Chains section; no hooks in v0.1):
+Skill chain (each stage Task-invokes the next per its own Chains section; v0.2 wires hook-fired gates — see §v0.2 cascade primitives):
 
 `/onboard` → `/discovery` → `/constitution` → `/specify` → `/plan` → `/review` → `/update-linear` → `/build` (per child ticket) → `/wrap` → `/verify` → `/retro`
 
@@ -38,6 +38,34 @@ Founder-fired commands (thin, deterministic): `/start`, `/status`, `/next`, `/co
 - **`/build` is the one stage that does not auto-fire** — Ralph runs cost real money and produce real commits, so the go signal stays explicit. It also splits into a spawn turn and a `--finalize` turn.
 - **Halt-card rendering** is centralized in `docs/templates/halt-messages.md`. Skills compose against its named patterns; they do not inline halt-card structure.
 - **The constitution at `docs/constitution.md`** governs specs and code. `/review` (check j) and `/verify` check against it. It does not exist for this repo yet — author it via `/constitution` before the first `/specify`.
+
+## v0.2 cascade primitives
+
+v0.2 adds hook-fired gates and a verification CLI on top of the v0.1 skill chain. The pieces below are wired and self-applied in this repo.
+
+### Cascade gates
+
+Named halt-gates fire at each stage's at-write boundary. Gate definitions and halt-card copy live in `docs/templates/halt-messages.md`; the full gate inventory is enumerable at any time with `python3 tools/solo-verify --list-gates`. Skills compose against named gates; they never inline gate logic.
+
+### Strategy enum
+
+`/specify` step 1 proposes a decomposition strategy (founder-confirmed at step 5) from the five-value enum per D3.1: `walking-skeleton`, `api-boundary`, `capability-cluster`, `refactor-spike`, and `hybrid`. The strategy populates the test-pyramid shape, the perceptual-evidence requirement, and the per-stage gate composition.
+
+### Hooks
+
+Hook wiring lives in `.claude/settings.json`. Eight scripts back the cascade events: `preflight-provenance.sh`, `pyramid-tampering.sh`, `four-hat-objection-coverage.py`, `stop-orchestrator.sh`, `session-start-state-restore.sh`, `session-end-telemetry.sh`, `precompact-safe-boundary.sh`, and `pretool-write-denylist.sh`. Shared helpers live in `.claude/hooks/lib/`.
+
+### Tainted state
+
+A manifest may be marked `is_tainted: true` with a `taint_reason` (per 0001 AC-18) when its provenance breaks. Downstream work written against a tainted manifest is suspect until reconciled. Cascade run-state is persisted at the canonical path `.cascade/run-state.json`; clearing taint is a `--reconcile-only` pass over the responsible stage.
+
+### Code markers
+
+In-code attention markers are defined in `.claude/rules/code-markers.md`: `🤔` (clarify question — proceeded on a best-guess assumption), `📝` (copy pending), and `☣️` (tainted code region). `/retro` scans the worktree for these and reports counts.
+
+### CI
+
+Continuous integration runs via GitHub Actions at `.github/workflows/ci.yml` (per 0001 AC-20).
 
 ## Session discipline
 
