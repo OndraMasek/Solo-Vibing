@@ -17,7 +17,7 @@ Five phases. Validates idea before specs. State lives in Linear (`[<MARKER>-DOC-
 
 ### Phase 1 — Discover (8 fields)
 
-Walk the founder through 8 questions sourced from `docs/product/north-star-questions.md` (read via the GitHub connector when running in chat). Persist answers to a new `[<MARKER>-DOC-NNNN] discovery: idea-brief-v<N>` Linear document per iteration. Update the `[<MARKER>-DOC-NNNN] discovery: state` document with `{phase, iteration, current_brief_doc_id, status}` at each phase transition.
+Walk the founder through 8 questions sourced from `docs/product/north-star-questions.md` (in chat: retrieve via Project-knowledge search; in code: read from the working tree). Persist answers to a new `[<MARKER>-DOC-NNNN] discovery: idea-brief-v<N>` Linear document per iteration. Update the `[<MARKER>-DOC-NNNN] discovery: state` document with `{phase, iteration, current_brief_doc_id, status}` at each phase transition.
 
 1. **Who is it for?** (primary + secondary segment archetypes)
 2. **What's their problem?**
@@ -38,7 +38,7 @@ Each field is source-tagged in the brief: `(user)`, `(ai-recommended)`, `(resear
 
 ### Phase 2 — Research
 
-**5 mandatory research prompts** (use `docs/templates/discovery/research-prompt-templates.md` — read via GitHub connector):
+**5 mandatory research prompts** (use `docs/templates/discovery/research-prompt-templates.md` — in chat: retrieve via Project-knowledge search; in code: read from the working tree):
 
 1. Problem validation
 2. Market sizing
@@ -82,7 +82,7 @@ No deviations. /specify reads research summaries by this structure when loading 
 
 ### Phase 3 — Challenge
 
-Load `docs/templates/discovery/challenge-checklist.md` (read via GitHub connector). Run each check against the idea brief + Phase 2 findings. Produce a new `[<MARKER>-DOC-NNNN] discovery: challenge-memo-iter<N>` Linear document with one of four verdicts. Auditor-stance per `auditor-stance.md` — state findings as facts, no LGTM closures.
+Load `docs/templates/discovery/challenge-checklist.md` (in chat: retrieve via Project-knowledge search; in code: read from the working tree). Run each check against the idea brief + Phase 2 findings. Produce a new `[<MARKER>-DOC-NNNN] discovery: challenge-memo-iter<N>` Linear document with one of four verdicts. Auditor-stance per `auditor-stance.md` — state findings as facts, no LGTM closures.
 
 - **approve** → Phase 5 approve branch.
 - **refine** → Phase 4.
@@ -124,7 +124,7 @@ Per `completion-status.md`. /discovery is multi-phase and resumable — emit per
 - `DONE` — Phase 5 exit reached (approve/kill/pivot); final artifact written. For approve: north-star.md write queued (executed on next code-side session); framing ticket created; /constitution Task-invoked.
 - `DONE_WITH_CONCERNS` — exit reached but with notable conditions: approve exit while 3+ Phase 1 fields remain `(research-pending)`; iteration cap reached and founder extended past cap; refine-at-cap forced conversion to kill; research-investigator returned `uncertain:` findings on a load-bearing prompt.
 - `BLOCKED` — `[<MARKER>-DOC-NNNN] discovery: state` cannot be located or read (Linear MCP error, doc deleted); research-investigator failed on a mandatory prompt (no deep report produced).
-- `NEEDS_CONTEXT` — missing `docs/templates/discovery/research-prompt-templates.md`, `docs/templates/discovery/challenge-checklist.md`, or `docs/product/north-star-questions.md` (/onboard step 1 should have caught these; re-run /onboard if reached); Linear MCP unreachable for `doc`-counter scan per `counter-allocation.md`.
+- `NEEDS_CONTEXT` — missing `docs/templates/discovery/research-prompt-templates.md`, `docs/templates/discovery/challenge-checklist.md`, or `docs/product/north-star-questions.md` (in chat this usually means the repo is not synced into the Project's knowledge base — not a dead connector and not a deleted file; re-run /onboard, whose preflight probes the KB sync per §repo-not-synced, or attach the repo via Project knowledge → GitHub → Add); Linear MCP unreachable for `doc`-counter scan per `counter-allocation.md`.
 
 For partial runs (founder ended the chat mid-Phase): emit `DONE` for that chat session with a note that the `discovery: state` Linear doc holds the resume point. Pausing is by design, not failure.
 
@@ -133,8 +133,19 @@ For partial runs (founder ended the chat mid-Phase): emit `DONE` for that chat s
 **Pattern:** P (phase-internal)
 **Group:** B
 **Within-group transitions:** Phase 1 → Phase 2 → Phase 3 (per `/discovery`'s three-phase internal protocol). Each phase's seal is an advisory PreCompact safe boundary (per D2.3 v1.3 §Within-group safe boundaries Group B row). Continuation is project-instruction-driven: after Phase N's output seals (Phase 1's domain map; Phase 2's drill-down notes; Phase 3's idea-brief), this skill instructs the model in-chat to begin Phase N+1's flow. No Task-invoke between phases (chat-Claude has no Task surface for intra-skill chaining; the model continues the narrative within the same chat).
+
+**Within-group fresh-session nudges (per SOL-130).** Phase 1 (Discover) and Phase 2 (Research) are individually heavy. After Phase 1 seals (idea-brief-v<N> written + `discovery: state` updated) and again after Phase 2 seals (research summaries written + state updated), proactively offer the founder a choice — "continue here, or resume in a fresh chat" — without being asked. Tie the nudge to actual context pressure where detectable (long transcript, many tool round-trips) rather than firing it blanket every run, to avoid nagging. The handoff is cheap because the `[<MARKER>-DOC-NNNN] discovery: state` doc already supports resume; surface a ready-to-paste prompt:
+
+```
+Resume /discovery at Phase <N+1>.
+Marker: <MARKER>
+Read first: [<MARKER>-DOC-NNNN] discovery: state (holds phase, iteration, current_brief_doc_id).
+Continue from the last sealed phase.
+```
+
+This is a lighter prompt than the Group-exit chat-end card; the full card still renders only at the Group B exit (Phase 3 idea-brief seal).
 **Group exit trigger:** idea-brief seal at Phase 3's completion. The idea-brief is the load-bearing output `/constitution` consumes; its seal is gated on `/discovery`'s own manifest at `.cascade/manifests/<idea-brief-id>-discovery.json` being written with the `discovery.idea-brief-sealed` gate evaluation passing (per D3.4, if defined; otherwise the standard provenance gate suffices).
-**Group exit render:** chat-end card per `docs/templates/chat-end-card.md`, variant `normal`. After render, set `cascade:run-state.last_completed_group = "B"`, write `cascade:run-state.last_completed_group_exit_manifest_path = ".cascade/manifests/<idea-brief-id>-discovery.json"`, flush, write `.cascade/handoff/last.md`. Do not Task-invoke anything.
+**Group exit render:** chat-end card per `docs/templates/chat-end-card.md`, variant `normal`. Render it proactively at the Group B exit — before any next-group (`/constitution`) output; continuing inline into Group C is a defect per SOL-130 and the template's §Enforcement. After render, set `cascade:run-state.last_completed_group = "B"`, write `cascade:run-state.last_completed_group_exit_manifest_path = ".cascade/manifests/<idea-brief-id>-discovery.json"`, flush, write `.cascade/handoff/last.md`. Do not Task-invoke anything.
 **Next group entry:** C (`/constitution`). The founder pastes the handoff prompt into a new chat.
 **Auto-fire compact handling:** not applicable. Group B runs in chat-Claude; no live PreCompact hook.
 **Group's exit manifest:** this skill's own manifest at `.cascade/manifests/<idea-brief-id>-discovery.json`. No chain intermediates (Phase 1 and Phase 2 outputs are intra-skill artifacts; only the idea-brief at Phase 3 produces a sealed manifest).
@@ -147,7 +158,7 @@ For partial runs (founder ended the chat mid-Phase): emit `DONE` for that chat s
 
 ## Notes
 
-**Linear is canonical for /discovery state, not the filesystem.** Per the project's source-of-truth convention (see `CLAUDE.md` §Where work happens), all /discovery artifacts except deep-report files live in Linear. This matters because /discovery runs in chat-Claude by default (`workflow.discovery_surface: chat`), and chat-Claude reads the repo via the GitHub connector — local filesystem writes would be invisible to it without an intermediate commit + push. Linear documents are read directly via the Linear connector with no commit step.
+**Linear is canonical for /discovery state, not the filesystem.** Per the project's source-of-truth convention (see `CLAUDE.md` §Where work happens), all /discovery artifacts except deep-report files live in Linear. This matters because /discovery runs in chat-Claude by default (`workflow.discovery_surface: chat`), and chat-Claude reads the repo from Project knowledge (the repo is synced in once via the GitHub Integration and retrieved at runtime via Project-knowledge search — there is no callable GitHub file-read tool in chat) — local filesystem writes would be invisible to it without an intermediate commit + push. Linear documents are read directly via the Linear connector with no commit step.
 
 **Resume contract across surfaces.** Each phase transition updates the `discovery: state` Linear doc with `{phase, iteration, status, last_action, timestamp}`. Any /discovery invocation (chat or code) reads this doc first, then resumes at the indicated phase. If both surfaces invoke /discovery concurrently, the last write wins — single-founder workflow, so true races are rare; defensive locking is v1.1.
 

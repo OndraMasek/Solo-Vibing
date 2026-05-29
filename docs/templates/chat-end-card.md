@@ -18,6 +18,29 @@ Every group-exit skill renders this template at its Group-exit branch:
 Per-skill variant-selection logic lives in each skill's /Chains section
 (see child_B_chains_sections.md for the v0.2 authored set).
 
+═══ Enforcement (proactive render) — per SOL-130 ═══
+
+Rendering this card at a group boundary is MANDATORY and PROACTIVE. When a
+group-boundary stage completes and its artifacts are written, the skill renders
+this card and proposes a new session BEFORE doing any next-group work — without
+being asked by the founder. The copy-paste resume prompt is the handoff.
+
+Continuing inline into the next group (writing next-group output in the same
+chat instead of rendering this card) is a DEFECT, not a style choice. The whole
+point of the group-boundary design is to keep each chat focused and let state
+live in Linear / run-state; drifting past the boundary fills the context window
+and loses that benefit.
+
+Concrete prior failure (SOL-130): after /discovery Phase 1, chat-Claude offered
+Phase 2 inline and only proposed a fresh session when the founder asked. The
+correct behavior is to propose the fresh session at the boundary, by default.
+
+For heavy multi-phase skills (e.g. /discovery), also offer a LIGHTER
+within-skill nudge at major internal boundaries (Phase 1, Phase 2) — "continue
+here or resume in a fresh chat" with a ready resume prompt — tied to context
+pressure where detectable, not a blanket rule. See the skill's /Chains section
+for its within-group nudge points.
+
 ═══ Four variants ═══
 
   - normal           — base body; both <optional> additive blocks empty

@@ -11,9 +11,21 @@
 ## Connectors required
 
 - **Linear** (project-level). Used to read/write tickets, documents, and cycles.
-- **GitHub** (project-level). Used to read the repo — skills, rules, templates, prior specs.
+- **GitHub Integration** (project-level). Syncs the repo into Project knowledge (one-time, and on refresh) so chat-Claude can retrieve repo files — skills, rules, templates, prior specs — via Project-knowledge search. There is no callable GitHub file-read tool in chat; the Integration's job is the *sync*, not live reads. The repo must also be added to *this* Project's knowledge (Project knowledge → **GitHub** → select repo → **Add**).
 
-If either is disconnected, halt and ask the founder to attach it before proceeding.
+If either is disconnected, halt and ask the founder to attach it before proceeding. If the GitHub Integration is on but a repo primitive can't be retrieved, the repo is not synced into this Project's knowledge — attach it via the click-path above.
+
+## Communication profile
+
+> Generated from `docs/product/founder-profile.md` (the canonical source, authored at `/onboard` step 3b). Tells chat-Claude how to talk to the founder. Re-render with `/onboard --reinit 8` after editing the profile.
+
+- **Technical background:** <technical-background — default: non-developer / business founder, limited technical background>
+- **Language:** <preferred-language — default: the language the founder writes in>
+- **Explanation depth:** <explanation-depth — default: answer + brief reasoning; explain each technical term when it first appears>
+- **Response length:** <response-length — default: short and to the point; avoid walls of text>
+- **Domain expertise:** <domain — default: unknown; ask before assuming an analogy lands>
+
+Calibrate language, length, and explanation depth to the above on every turn. When in doubt, apply the defaults: assume limited technical background, avoid unexplained jargon, offer a recommendation alongside open questions, and keep it short.
 
 ## Persistence convention
 
@@ -29,7 +41,7 @@ Document type prefixes (allocated per `.claude/rules/counter-allocation.md` in t
 
 ## Skills location
 
-Skills live in the repo under `.claude/skills/<name>/SKILL.md`. Read them via the GitHub connector before invoking. Active in chat:
+Skills live in the repo under `.claude/skills/<name>/SKILL.md`. Retrieve them via Project-knowledge search before invoking (they live in Project knowledge via the synced repo; there is no callable GitHub file-read tool). Active in chat:
 
 - `/discovery` — five-phase north-star validation. Runs here.
 - `/constitution` — drafts and amends `docs/constitution.md`. Runs here in seed mode; can also be invoked in Code for amendments.
@@ -47,7 +59,7 @@ Everything downstream (`/specify`, `/plan`, `/review`, `/build`, `/wrap`, `/veri
 | `/build`, `/wrap` | code | Linear ticket + repo (git commits) |
 | `/verify`, `/retro` | code | Linear doc + ticket |
 
-## Rules (always-loaded — read from repo via GitHub connector)
+## Rules (always-loaded — retrieve via Project-knowledge search)
 
 - `.claude/rules/naming.md` — ticket IDs, slugs, file paths.
 - `.claude/rules/counter-allocation.md` — how to allocate `NNNN` for new docs.
@@ -61,6 +73,7 @@ Everything downstream (`/specify`, `/plan`, `/review`, `/build`, `/wrap`, `/veri
 - **One phase per chat turn.** `/discovery` is interactive — pause between Phases for founder confirmation.
 - **Cite Linear doc IDs.** Every reference to prior state names the `[<MARKER>-DOC-NNNN]` it lives in. No "I remember from earlier in this chat" — chat memory is not durable.
 - **Linear-first writes.** When in doubt, write to Linear, not the chat transcript.
+- **Honor the Communication profile.** Read the Communication profile section above at the start of every chat and calibrate technical level, language, length, and explanation depth to it — don't re-ask what's already recorded.
 
 ## Notes
 

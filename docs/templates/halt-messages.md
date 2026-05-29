@@ -365,11 +365,39 @@ Skills reference these patterns by name when they halt — e.g. `halt-card per d
 **When:** The GitHub MCP connector is not connected in the Claude.ai project, or a GitHub query returns errors. Surfaced by /onboard (step 2).
 
 **Recommendation:** Add (or reconnect) the GitHub connector in Claude.ai settings, then re-run the command.
-**Rationale:** Chat-Claude needs GitHub MCP to read repo state remotely — without it, /specify, /plan, /verify, and /audit-self lose codebase visibility during cascade stages. v0.1 only verifies the connection at /onboard; v0.2 will wire individual skills to GitHub tools.
+**Rationale:** This is the **GitHub MCP** connector — the Code-surface tool /specify, /plan, /verify, and /audit-self use to read repo state remotely. It is distinct from the chat-surface **GitHub Integration** (which syncs the repo into Project knowledge for retrieval via Project-knowledge search — see §github-integration-missing). v0.1 verifies the MCP connection at /onboard; v0.2 will wire individual skills to GitHub tools.
 
 **Alternatives:** none — the connector is mandatory for any GitHub-touching operation. The GitHub MCP endpoint URL may change; verify against https://github.com/github/github-mcp-server if the connector fails.
 
 **Diagnostic context:** which operation was attempted, the GitHub error string if surfaced, whether the connector shows as connected in Claude.ai settings.
+
+---
+
+### §github-integration-missing
+
+**When:** `/onboard`'s chat-surface preflight found the Claude.ai **GitHub Integration** connector is not enabled for the account/project. Distinct from the GitHub MCP connector (§github-unavailable) — the Integration is what syncs the repo into the Project's knowledge base so chat-Claude can retrieve repo files via Project-knowledge search. There is no callable GitHub file-read tool in chat.
+
+**Recommendation:** Settings → Connectors → enable **GitHub Integration** and grant access to this repo, then re-run `/onboard`.
+**Rationale:** Without the Integration the repo can never be synced into Project knowledge, so `/discovery` Phase 1 and every chat-surface skill that reads repo primitives would halt with nothing to retrieve.
+
+**Alternatives:**
+1. Run the cascade in legacy code surface — the working tree is read directly, so the Integration is not needed; set `workflow.discovery_surface: code` in `docs/.solo-config.json`.
+
+**Diagnostic context:** whether GitHub Integration shows as connected in Claude.ai → Settings → Connectors; the surface `/onboard` is running on (chat vs code).
+
+---
+
+### §repo-not-synced
+
+**When:** `/onboard`'s chat-surface preflight has the GitHub Integration enabled but a Project-knowledge probe for `docs/product/north-star-questions.md` returned empty — the specific repo has not been added to *this* Project's knowledge base.
+
+**Recommendation:** In the Project's knowledge base → click **GitHub** → select this repo → select all files → **Add**. Then re-run `/onboard` (the preflight re-probes).
+**Rationale:** The Integration being on is necessary but not sufficient; each repo must be attached to the Project's knowledge explicitly. An unsynced repo is the real cause behind a chat-surface "primitive missing" halt — not a dead connector and not a deleted file.
+
+**Alternatives:**
+1. Run the cascade in legacy code surface (`workflow.discovery_surface: code`) — the working tree is read directly, bypassing Project knowledge.
+
+**Diagnostic context:** the probe target (`docs/product/north-star-questions.md`); whether the repo appears under the Project's GitHub knowledge source; the surface `/onboard` is running on.
 
 ---
 
@@ -395,7 +423,7 @@ Skills reference these patterns by name when they halt — e.g. `halt-card per d
 
 **Alternatives:**
 1. Manual setup: create the GitHub repo via the web UI **without** "Initialize this repository with a README" checked, then `git remote add origin <url>` and `git push -u origin main`. The auto-init box is what causes the parallel-history conflict — leave it off.
-2. Skip the remote entirely (defer GitHub push to later). Chat-Claude will not be able to read the repo via the GitHub connector until a remote exists, so /discovery in chat will be blind to repo state — only do this if you intend to stay in code mode for /discovery.
+2. Skip the remote entirely (defer GitHub push to later). Chat-Claude will not be able to read the repo via Project-knowledge search (the GitHub Integration cannot sync a repo with no remote) until a remote exists, so /discovery in chat will be blind to repo state — only do this if you intend to stay in code mode for /discovery.
 
 **Diagnostic context:** `git remote -v` output, `gh auth status` output, repo directory name (used as default repo name).
 

@@ -1,0 +1,21 @@
+# Founder profile — `<MARKER>`
+
+> Canonical source for how chat-Claude communicates with the founder. Authored at `/onboard` step 3b from 5 questions; defaults apply to any unanswered question. The chat-instructions **Communication profile** section is *generated from this file*. Edit here, then `/onboard --reinit 8` to re-render the paste-block.
+
+## Communication profile
+
+- **Technical background:** <non-developer | some technical | developer — default: non-developer / business founder, limited technical background>
+- **Preferred language:** <language for our chats, e.g. Czech / English — default: the language the founder writes in>
+- **Explanation depth:** <just the answer | answer + reasoning — default: answer + brief reasoning, and explain each technical term when it first appears>
+- **Response length:** <short and to the point | thorough — default: short and to the point; avoid walls of text>
+- **Domain expertise:** <professional field / what the founder knows well — default: unknown; ask before assuming an analogy lands>
+
+## How to apply
+
+By default — for any field left at its default — assume a non-developer / business founder:
+
+- avoid unexplained jargon; explain what a term means when introducing it;
+- offer a recommendation alongside open questions (don't leave the founder a blank to fill);
+- write short; keep responses brief.
+
+Override these defaults only where the profile above records a more technical background, a different language, or a preference for thoroughness.
