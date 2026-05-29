@@ -75,7 +75,7 @@ else:
 ## Gate 1 — `verify.provenance` (pre-flight; milestone-wide chain)
 
 ```text
-read cascade:run-state from docs/.cascade/run-state.json
+read cascade:run-state from .cascade/run-state.json
 
 # Step 1: read the parent /plan manifest (the milestone's planning seal)
 expected_parent_path ← cascade:run-state.last_completed_stage.postcondition_manifest_path

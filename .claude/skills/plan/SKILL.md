@@ -34,7 +34,7 @@ D3.4 §Per-stage gate inventory `/plan` row names this skill's three gates `plan
    **Gate `plan.provenance`** (pre-flight; chain integrity + AC-hash chain). Per D3.4 §Per-stage gate inventory `/plan` row. Evaluates BEFORE the decomposer invoke and before any halt card is composed (per D3.4 §Aggregation rules — all gates evaluate, none short-circuit, single aggregate halt card):
 
    ```text
-   read cascade:run-state from docs/.cascade/run-state.json
+   read cascade:run-state from .cascade/run-state.json
 
    # Step 1: parent manifest path is /review's seal (or /specify's seal if /review skipped)
    expected_parent_path ← cascade:run-state.last_completed_stage.postcondition_manifest_path

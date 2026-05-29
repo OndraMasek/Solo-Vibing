@@ -99,7 +99,7 @@ else:
 ### Gate 1 — `review.provenance` (pre-flight; manifest chain to `/specify`)
 
 ```text
-read cascade:run-state from docs/.cascade/run-state.json
+read cascade:run-state from .cascade/run-state.json
 
 # Step 1: parent manifest must be /specify's seal
 expected_parent_path ← cascade:run-state.last_completed_stage.postcondition_manifest_path

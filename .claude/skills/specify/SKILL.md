@@ -266,7 +266,7 @@ Author parent spec. User-facing entry point of the cascade. On seal, the cascade
 
    ```text
    on --continue or --unseal:
-       read cascade:run-state from docs/.cascade/run-state.json
+       read cascade:run-state from .cascade/run-state.json
        expected_parent ← cascade:run-state.last_completed_stage.postcondition_manifest_path
        if expected_parent absent or path doesn't resolve to a file:
            FAIL spec.provenance with §provenance-chain-broken
