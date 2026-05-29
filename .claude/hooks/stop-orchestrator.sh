@@ -27,8 +27,8 @@ set -u
 
 # Source the shared lib
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=_lib.sh
-. "$SCRIPT_DIR/_lib.sh"
+# shellcheck source=lib/common.sh
+. "$SCRIPT_DIR/lib/common.sh"
 
 trace "stop-orchestrator: fired"
 

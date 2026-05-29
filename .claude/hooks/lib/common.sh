@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# .claude/hooks/_lib.sh — shared helpers for Solo-Vibing cascade hooks.
+# .claude/hooks/lib/common.sh — shared helpers for Solo-Vibing cascade hooks.
 # Sourced by every bash hook script. Provides:
 #   - read_hook_payload: read stdin JSON, populate $HOOK_PAYLOAD
 #   - jq_field: extract a field from $HOOK_PAYLOAD via jq
