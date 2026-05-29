@@ -24,6 +24,8 @@ Halt codes (per D3.4 §`/review` row):
 Exit codes: always 0; halt semantics live in the JSON decision field.
 """
 
+from __future__ import annotations
+
 import json
 import re
 import sys
