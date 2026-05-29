@@ -326,7 +326,7 @@ Per `completion-status.md`. The cascade engine routes on this:
 **Group exit render:** not this skill. Chain-intermediate; after `/review`'s manifest seals, this skill continues to `/update-linear` without rendering.
 **Next group entry:** not this skill. See `/update-linear`'s `/Chains` section for the Group E exit transition.
 **Auto-fire compact handling:** not applicable for chat-Claude. Same disposition as `/plan`'s row.
-**Group's exit manifest:** not-this-skill — see `/update-linear`. `/review`'s manifest at `.cascade/manifests/<ticket>-review.json` is a chain intermediate. The four-hat-panel agent's per-hat outputs (if Group E's `/review` also runs a four-hat fan-out, distinct from Group D's `/specify` fan-out) are inputs to `/review`'s seal, not the exit manifest.
+**Group's exit manifest:** not-this-skill — see `/update-linear`. `/review`'s manifest at `.cascade/manifests/<ticket>-review.json` is a chain intermediate. The four-hat agents' (`four-hat-{user,engineer,pm,skeptic}.md`) per-hat outputs (if Group E's `/review` also runs a four-hat fan-out, distinct from Group D's `/specify` fan-out) are inputs to `/review`'s seal, not the exit manifest.
 
 ## Notes
 

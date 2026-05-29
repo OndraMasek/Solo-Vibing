@@ -30,7 +30,7 @@ See [`CLAUDE.md` §v0.2 cascade primitives](./CLAUDE.md) for the session-layer r
 - [`docs/constitution.md`](./docs/constitution.md) — Solo-Setup's own governing principles. **Not** shipped to forks; forks re-author via /constitution.
 - [`docs/templates/`](./docs/templates/) — scaffolds used by skills (`spec.md.template`, `halt-messages.md`, Ralph `run.sh`, `AGENTS.md`, `CLAUDE.md`, `PROMPT.md`, plus `discovery/` prereq templates and `onboarding/` chat handoff templates).
 - [`scripts/`](./scripts/) — onboard helpers: `check_prereqs.sh` and `verify_linear_key.sh`.
-- [`docs/specs/0001-wrap-build-log/`](./docs/specs/0001-wrap-build-log/) — Solo-Setup's own worked-example sealed spec. **Not** shipped to forks.
+- [`docs/specs/`](./docs/specs/) — Solo-Setup's own worked-example sealed specs (`0001-wrap-build-log`, `0001-v0.2-cascade-integration`, `0002-v0.2-release-wrap-up`, `0003-provenance-root`). **Not** shipped to forks — `bootstrap.sh` excludes `docs/specs` wholesale.
 - [`docs/decisions/`](./docs/decisions/) — append-only ADR log.
 - [`docs/.solo-config.json`](./docs/.solo-config.json) — workflow knobs (marker, cascade mode, model profile, Ralph caps, `workflow.discovery_surface`). **Not** shipped to forks; rendered from the `.template` version by /onboard.
 
@@ -88,7 +88,7 @@ GitHub's **Use this template → Create a new repository** button bypasses `boot
 - `docs/.solo-config.json` (Solo-Setup's config)
 - `docs/constitution.md` (Solo-Setup's governing principles)
 - `docs/product/north-star.md` (Solo-Setup's north-star)
-- `docs/specs/0001-wrap-build-log/` (Solo-Setup's in-flight spec)
+- `docs/specs/` (Solo-Setup's worked-example sealed specs — `0001-wrap-build-log`, `0001-v0.2-cascade-integration`, `0002-v0.2-release-wrap-up`, `0003-provenance-root`)
 
 Downstream skills (`/specify`, `/review`, `/verify`) will read these as the fork's own state and produce incoherent output. If you used this path anyway, recover by running:
 
@@ -96,7 +96,7 @@ Downstream skills (`/specify`, `/review`, `/verify`) will read these as the fork
 bash bootstrap.sh --refresh-templates   # re-overlay clean templates
 # then delete the inherited upstream identity:
 rm -f CLAUDE.md docs/.solo-config.json docs/constitution.md docs/product/north-star.md
-rm -rf docs/specs/0001-wrap-build-log
+rm -rf docs/specs   # removes all upstream worked-example sealed specs (matches bootstrap.sh --exclude=docs/specs)
 git add -A && git commit -m "chore: clear upstream identity"
 ```
 
