@@ -1,0 +1,16 @@
+{
+  "active_stages": [],
+  "kill_in_progress": "",
+  "last_completed_group": "D",
+  "last_completed_stage": {
+    "name": "/specify",
+    "postcondition_manifest_path": ".cascade/manifests/SOL-102-specify.json",
+    "postcondition_manifest_sha256": "d5651001d97172691b52dc86c72e2cb7205a6b8b583019648dcbd0e8cc396e0c"
+  },
+  "manual_halt": "",
+  "marker": "SOL",
+  "next_chain_step": "",
+  "product": "Solo Claude Stack",
+  "queue_version": 1,
+  "schema_version": "2.1-v2.1"
+}
