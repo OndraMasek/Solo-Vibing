@@ -89,22 +89,20 @@ Per `completion-status.md`:
 - `BLOCKED` — step 1 red tests; step 2 out-of-scope file changes. Halt-card per `docs/templates/halt-messages.md`; /build's finalize phase surfaces it and the path back is `/build <MARKER>-N-K --continue`.
 - `NEEDS_CONTEXT` — branch name doesn't match the `<MARKER>-N-<slug>-K` convention per `naming.md`; child ticket missing; parent ticket missing.
 
-## Naming reconciliation note
+## Naming reconciliation note (resolved)
 
-D3.4 §Per-stage gate inventory `/wrap` row names three gates: `wrap.provenance`, `wrap.product-docs-mirrored`, `wrap.label-transition`. The parent `spec.md` AC-10 names **four** gates: `wrap.provenance`, `wrap.tests-green`, `wrap.mirror-sha-match`, `wrap.linear-state-updated`.
+**Source of truth: `solo-verify` `STAGE_ORDER["wrap"]`.** `/wrap` fires exactly **four** gates, in this order: `wrap.provenance`, `wrap.tests-green`, `wrap.mirror-sha-match`, `wrap.linear-state-updated`. This set is the executable authority — it is defined in `tools/solo-verify` (`STAGE_ORDER["wrap"]` plus the four `GateSpec` entries), pinned by `tests/solo-verify`, and matches both this skill's `GATES_AT_WRAP` (§Gate evaluation) and parent `spec.md` AC-10. There is no fifth or sixth gate.
 
-The split lines up partially:
+The earlier D3.4 §Per-stage gate inventory `/wrap` row named three gates (`wrap.provenance`, `wrap.product-docs-mirrored`, `wrap.label-transition`). Those D3.4 names are **superseded** — they are not live gate names. AC-10 split `wrap.product-docs-mirrored` into the distinct `wrap.tests-green` and `wrap.mirror-sha-match` predicates and renamed `wrap.label-transition` to `wrap.linear-state-updated`; `solo-verify` implements the AC-10 four. The crosswalk below is retained only so the superseded D3.4 names remain traceable:
 
-| D3.4 | spec.md AC-10 | Same predicate? |
+| D3.4 (superseded) | Live gate (`solo-verify`) | Predicate |
 |---|---|---|
-| `wrap.provenance` | `wrap.provenance` | Yes (identical) |
-| (part of `wrap.product-docs-mirrored`) | `wrap.tests-green` | Different — AC-10's `wrap.tests-green` is the "red tests block" predicate (carried forward from v0.1's existing tests-green-at-wrap check). D3.4's row composes mirror sha + lock-balance only. AC-10 splits tests-green out as its own gate. |
-| `wrap.product-docs-mirrored` | `wrap.mirror-sha-match` | Yes — same predicate (filesystem-Linear mirror sha match). AC-10's name reads more narrowly. |
-| `wrap.label-transition` | `wrap.linear-state-updated` | Yes — same predicate (Linear ticket label transition to `scope:built` + status to `Done`). AC-10's name reads more broadly. |
+| `wrap.provenance` | `wrap.provenance` | Identical — manifest chain to `/build`. |
+| (split out of `wrap.product-docs-mirrored`) | `wrap.tests-green` | Red tests block (v0.1 carry-forward); a distinct halt from mirror-sha. |
+| `wrap.product-docs-mirrored` | `wrap.mirror-sha-match` | Filesystem ↔ Linear mirror sha match. |
+| `wrap.label-transition` | `wrap.linear-state-updated` | Linear label → `scope:built` + status → `Done`. Halt code: `§wrap-label-transition-failed`. |
 
-This skill uses **AC-10's four names** (`wrap.provenance`, `wrap.tests-green`, `wrap.mirror-sha-match`, `wrap.linear-state-updated`) because AC-10 explicitly enumerates four gates and the parent spec is the binding for this skill's acceptance criterion. The split of tests-green out from mirror-sha-match is an AC-10 refinement over D3.4's row and is more granular for `solo-verify` parity (a tests-green failure surfaces a different halt than a mirror-sha failure; surfacing them as separate gates is clearer at `solo-verify --list-gates` and `solo-verify --explain` time).
-
-**Surfaced item:** D3.4's `/wrap` row carries three gates; spec.md AC-10 carries four. The split here uses AC-10's four. **Recommendation:** amend D3.4's `/wrap` row to match — split `wrap.product-docs-mirrored` into `wrap.tests-green` + `wrap.mirror-sha-match`. One-line edit.
+D3.4 lives in `docs/design/v0.2/D3_4_gate_definitions.md` as an append-only design record; its `/wrap` row is left as historical provenance and is not the binding for the live gate set.
 
 ## Gate evaluation
 
