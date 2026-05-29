@@ -1,6 +1,6 @@
 ---
 name: onboard
-description: First-run interactive setup. Initializes a new Solo-Setup project — brownfield check, prereqs, upstream-content audit, Linear + GitHub MCP connections, GitHub remote, Linear API key, project marker, Linear team pick, six-project + Status-doc Linear product layer, north-star + design-system + placeholder-milestone seeding, optional product-level default strategy, Project Instructions paste-block render, and Group A chat-end card. Fires on "/onboard", "onboard", "set up project", "initialize", or on the first chat-Claude turn in an uninitialized repo (no docs/.solo-config.json). Manual override `/onboard --reinit <step>` re-runs a single step. Invokes the codebase-mapper agent at step 0 for brownfield repos.
+description: First-run interactive setup. Initializes a new Solo-Setup project — brownfield check, prereqs, upstream-content audit, Linear + GitHub MCP connections, GitHub remote, Linear API key, project marker, Linear team pick, six-project + Status-doc Linear product layer, north-star + design-system + placeholder-milestone seeding, Project Instructions paste-block render, and Group A chat-end card. Fires on "/onboard", "onboard", "set up project", "initialize", or on the first chat-Claude turn in an uninitialized repo (no docs/.solo-config.json). Manual override `/onboard --reinit <step>` re-runs a single step. Invokes the codebase-mapper agent at step 0 for brownfield repos.
 ---
 
 # onboard
@@ -44,30 +44,11 @@ The pre-step gates (brownfield check, prereqs, connectors, GitHub remote, Linear
 
 6. **Initialise Status doc with "no work in progress."** The single Linear document under the Product project, the 30-second read per D1 §Status. Initial content sets `Current milestone: M-1 (placeholder)`, all gates "pending", `What works`, `What's broken`, `What's next` empty. Per D1 §Linear product layer Status subsection.
 
-7. **Elicit `workflow.default_strategy` from the founder.** Present the canonical five strategies plus a "skip" option:
+7. **Write the joint config. Do NOT elicit a decomposition strategy here.** Compose step 1's `linear.project_naming` decision with the rest of the initial `docs/.solo-config.json` into a single write. `workflow.default_strategy` is written as the empty string `""` — **onboarding does not ask the founder to pick a decomposition strategy.**
 
-   ```text
-   Optional: Pick a default decomposition strategy for this product. /specify
-   will use this as its initial proposal for the first feature; you can override
-   per spec, and subsequent features may diverge.
+   **Why the strategy is not elicited at onboard.** The decomposition strategy is a per-feature decision made during `/specify`: step 1 proposes a strategy from the five-strategy catalog (`walking-skeleton`, `api-boundary`, `capability-cluster`, `refactor-spike`, `hybrid`) and the founder confirms it at step 5. The strategy must be set there because `/specify` step 3 derives the spec's test-pyramid shape from it and the `spec.pyramid-shape` / `spec.strategy-evidence` gates check against it. A founder at onboarding has no feature to reason about yet, so choosing a strategy at setup time is premature and out of place. The empty `""` slot satisfies the `onboard.config-write` gate's slot-presence predicate and `/specify` step 1's read-but-tolerate-empty contract — `/specify` proposes from first principles when the default is empty.
 
-     1. walking-skeleton    — one playable increment per milestone
-                              (end-user products)
-     2. api-boundary        — one API boundary delivered per milestone
-                              (libraries, services)
-     3. capability-cluster  — one user-visible capability per milestone
-                              (apps that ship capabilities, not surfaces)
-     4. refactor-spike      — invariance-preservation work
-                              (no new functionality)
-     5. hybrid              — composes per-child; defer per-feature
-     6. skip                — no product-level default
-
-   Selection (1–6):
-   ```
-
-   On selection 1–5, write the corresponding enum value to `docs/.solo-config.json`'s `workflow.default_strategy` field (step 7's job is the elicit + populate; step 7 composes with step 6's `docs/.solo-config.json` initial-write into a single joint write). On selection 6 (skip), write the empty string `""`. The empty string is the v0.1-shipped default per Child A's `solo-config-additions.json`; the read-but-tolerate-empty pattern in `/specify` step 1 handles this gracefully.
-
-   Per D3.1 §`/onboard` product-level default; parent spec Open Question 4; Child 0001-B continuation 0's `/specify` step 1 amendment.
+   The `workflow.default_strategy` slot is retained (empty) as a forward-compatible, optional product-level *hint*: a founder may hand-set it later to seed `/specify`'s proposal, but the cascade never sets it at onboarding and never treats it as the decision. Per D3.1 §`/onboard` product-level default — **amended**: the v0.2 onboard elicitation is removed; `/specify` step 1's read-but-tolerate-empty wiring is unchanged. (Parent spec Open Question 4; Child 0001-B continuation 0's `/specify` step 1 amendment.)
 
    The joint config write at this step also produces `CLAUDE.md` from `docs/templates/CLAUDE.md.template` with `<MARKER>` substituted (the v0.1 CLAUDE.md scaffold step folds into the joint config-write turn). If a `CLAUDE.md` already exists (re-run, or founder created it manually), show the diff and ask before overwriting.
 
@@ -81,11 +62,11 @@ The pre-step gates (brownfield check, prereqs, connectors, GitHub remote, Linear
 
 ### Step-number rationale
 
-The step 7 (`workflow.default_strategy` elicit) lands here, not earlier, because:
+Step 7 writes the joint `docs/.solo-config.json` (it does not elicit a strategy — see step 7). It lands here, not earlier, because:
 
 - Steps 1–6 build the Linear product layer and the Status doc. Pasting Project Instructions (step 8) is only meaningful once that layer exists.
-- The `workflow.default_strategy` slot's first downstream consumer is `/specify` step 1, which runs in a subsequent chat after the Project Instructions paste. The `/onboard` chat must write the slot before the Project Instructions paste so that the founder's first `/specify` chat reads a fully-wired `docs/.solo-config.json`.
-- Placing the elicit between step 6 (Status doc init) and step 8 (Project Instructions render) keeps all `docs/.solo-config.json` writes adjacent (step 1's `linear.project_naming` decision + step 7's `workflow.default_strategy` write batch into a single `onboard.config-write` gate at the joint config-write moment).
+- The `workflow.default_strategy` slot is consumed by `/specify` step 1 in a subsequent chat. The `/onboard` chat must write the slot (empty) before the Project Instructions paste so the founder's first `/specify` chat reads a fully-wired `docs/.solo-config.json`.
+- Placing the joint config write between step 6 (Status doc init) and step 8 (Project Instructions render) keeps all `docs/.solo-config.json` writes adjacent (step 1's `linear.project_naming` decision + step 7's slot write batch into a single `onboard.config-write` gate at the joint config-write moment).
 
 ## Gate evaluation
 
@@ -196,13 +177,13 @@ if config_naming != expected_naming_mode:
 # (Optional slot per D3.1 §/onboard product-level default; empty string accepted.)
 if "workflow" not in config:
     FAIL with §onboard-config-write-failed
-    diagnostic: f"config missing 'workflow' top-level key; step 7 should have written it (empty string if founder skipped)"
+    diagnostic: f"config missing 'workflow' top-level key; step 7 writes it (workflow.default_strategy is empty in v0.2 — onboarding does not elicit a strategy)"
     continue
 
 slot ← config.workflow.get("default_strategy")
 if slot is None:
     FAIL with §onboard-config-write-failed
-    diagnostic: f"config workflow.default_strategy absent; step 7 should have written it (empty string if founder skipped)"
+    diagnostic: f"config workflow.default_strategy absent; step 7 writes it as empty string (onboarding does not elicit a strategy; /specify chooses it)"
     continue
 
 # Predicate 7: workflow.default_strategy value is either empty or in the canonical enum
@@ -212,7 +193,7 @@ CANONICAL_STRATEGIES = {
 }
 if slot != "" and slot not in CANONICAL_STRATEGIES:
     FAIL with §onboard-config-write-failed
-    diagnostic: f"config workflow.default_strategy='{slot}' is not empty and not in canonical enum {sorted(CANONICAL_STRATEGIES)}; step 7's writer corrupted the value"
+    diagnostic: f"config workflow.default_strategy='{slot}' is not empty and not in canonical enum {sorted(CANONICAL_STRATEGIES)}; onboard writes '' — a non-empty value came from a manual hand-set and must be a valid enum member"
     continue
 
 # Predicate 8: invariance slot exists (Child A solo-config-additions.json ships this with
@@ -238,7 +219,7 @@ Write the `/onboard` manifest at `.cascade/manifests/<marker>-onboard.json` per 
   "product": "<product name>",
   "onboard_sealed_at": "<ISO-8601 timestamp>",
   "outputs": {
-    "summary":                          "/onboard initialised the <product> Linear product layer (six projects + Status doc), populated docs/.solo-config.json with marker '<MARKER>' and workflow.default_strategy '<value or empty>', and seeded Product / Design / Milestones / Status with founder-supplied content.",
+    "summary":                          "/onboard initialised the <product> Linear product layer (six projects + Status doc), populated docs/.solo-config.json with marker '<MARKER>' (workflow.default_strategy left empty — chosen per-feature at /specify), and seeded Product / Design / Milestones / Status with founder-supplied content.",
     "linear_projects_created":          [
       {"name": "<Product or [<MARKER>] Product>",       "id": "<linear-project-id>"},
       {"name": "<Architecture or [<MARKER>] Architecture>", "id": "<id>"},
@@ -251,7 +232,7 @@ Write the `/onboard` manifest at `.cascade/manifests/<marker>-onboard.json` per 
     "marker":                           "<MARKER>",
     "linear_project_naming":            "plain" | "prefixed",
     "config_path":                      "docs/.solo-config.json",
-    "workflow_default_strategy":        "<enum value or empty string>",
+    "workflow_default_strategy":        "",
     "north_star_doc_id":                "<linear-doc-id>",
     "design_system_doc_id":             "<linear-doc-id or null if non-UI product>",
     "placeholder_milestone_id":         "<linear-issue-id>",
@@ -269,7 +250,7 @@ Schema rules per D2.1 v2 + D3.1 + this amendment:
 
 - `outputs.summary` is the single-sentence description D4.6 v1.1 reads to populate the chat-end card's "What just happened" section per D2.3 v1.3 §`/Chains` contract per-pattern statement (Pattern T row: `/onboard`'s manifest is the Group A exit manifest).
 - `outputs.linear_projects_created[]` is the six-element list; order matches the canonical D1 ordering (Product, Architecture, Design, Milestones, Backlog, Done) for downstream deterministic indexing.
-- `outputs.workflow_default_strategy` is the empty string `""` if the founder selected "skip" at step 7, or one of the canonical five strategies otherwise. The empty string is a valid v0.2 value per the read-but-tolerate-empty contract from Child 0001-B continuation 0's `/specify` step 1 amendment.
+- `outputs.workflow_default_strategy` is the empty string `""` in v0.2 — onboarding does not elicit a decomposition strategy (it is chosen per-feature at `/specify`, proposed step 1 / confirmed step 5). The field is retained for forward compatibility; a non-empty value can only arise from a founder hand-setting the slot later. The empty string is valid per the read-but-tolerate-empty contract from Child 0001-B continuation 0's `/specify` step 1 amendment.
 - `outputs.project_instructions_pasted_at` mirrors `cascade:run-state.project_instructions_pasted_at` (the step 8 confirmation timestamp); included on the manifest for D4.6 v1.1's re-derivation and for diagnostic clarity in `/retro` reports.
 - `input_provenance` carries null parent fields because `/onboard` is the cascade's bootstrap stage — there is no upstream manifest to chain to.
 - `manifest_sha256` recomputes with the self-field zeroed per D2.1 v2's manifest-checksum protocol.
@@ -326,9 +307,9 @@ Step 0's brownfield path invokes the `codebase-mapper` agent inline and returns 
 
 - **D2.1 v2 §`/onboard` row** — the upstream manifest schema baseline (linear_projects_created[], status_doc_id, marker, config_path); this amendment extends with `workflow_default_strategy`, `linear_project_naming`, `placeholder_milestone_id`, `project_instructions_pasted_at`, and the `summary` field per D2.1 v2.1 common-manifest-fields.
 - **D2.1 v2 §Caller-side verification protocol** — `/onboard` has no upstream stage, so steps 1–5 of the protocol return immediately on null `last_completed_stage`; step 6's stage-specific verifier predicates are this amendment's two gates.
-- **D2.3 v1.3 §`/onboard` integration point** — the eight-step sequence v1.3 specified; this amendment renumbers v1.3's steps 7 and 8 to 8 and 9 to insert the new step 7 (workflow.default_strategy elicit).
+- **D2.3 v1.3 §`/onboard` integration point** — the eight-step sequence v1.3 specified; this amendment renumbers v1.3's steps 7 and 8 to 8 and 9 to insert the new step 7 (the joint `docs/.solo-config.json` write; `workflow.default_strategy` written empty, not elicited).
 - **D2.3 v1.3 §Project Instructions block** — the literal paste-block content step 8 renders.
-- **D3.1 §`/onboard` product-level default** — the optional-slot semantics for `workflow.default_strategy`; the catalog of five canonical strategies + skip option; the read-but-tolerate-empty contract that composes with `/specify` step 1.
+- **D3.1 §`/onboard` product-level default** — the optional-slot semantics for `workflow.default_strategy` and the read-but-tolerate-empty contract that composes with `/specify` step 1. **Amended in this skill:** the v0.2 onboard founder-facing strategy elicitation is removed — onboard writes the slot empty and the decomposition strategy is chosen per-feature at `/specify` (proposed step 1, confirmed step 5). The slot remains as an optional hint a founder may hand-set later; the strategy catalog and confirm flow live in `/specify`, not here.
 - **D3.4 §Per-stage gate inventory `/onboard` row** — the two-gate inventory this amendment implements.
 - **D3.4 §Aggregation rules** — all-gates-evaluate, single-card-aggregate semantics applied to /onboard's at-write halt.
 - **D1 §Linear product layer** — the six-project structure, the Status doc semantics, the prefix-mode convention.
@@ -352,7 +333,7 @@ Step 0's brownfield path invokes the `codebase-mapper` agent inline and returns 
 
 **Brownfield step invokes the agent, not the command.** Per audit decision #7, the brownfield analysis is the `codebase-mapper` agent. /onboard Task-invokes the agent directly; the founder's manual re-run surface is the separate `/map-codebase` command. /onboard does not call `/map-codebase`.
 
-**AskUserQuestion re-statement convention** *(per the Bomber-test permission-classifier finding)*. When a step uses `AskUserQuestion` followed by a privileged tool call (e.g. Linear write, filesystem write outside the templates directory), the skill emits a one-line text output re-stating the founder's authorization in the response immediately before the tool call. The classifier reads recent context; re-stating the answer in-line ensures the authorization is visible at decision time. Applies to the upstream-content wipe gate, the team-pick prompt, the north-star seeding writes (step 3), the design-system seeding writes (step 4), and step 7's `workflow.default_strategy` selection.
+**AskUserQuestion re-statement convention** *(per the Bomber-test permission-classifier finding)*. When a step uses `AskUserQuestion` followed by a privileged tool call (e.g. Linear write, filesystem write outside the templates directory), the skill emits a one-line text output re-stating the founder's authorization in the response immediately before the tool call. The classifier reads recent context; re-stating the answer in-line ensures the authorization is visible at decision time. Applies to the upstream-content wipe gate, the team-pick prompt, the north-star seeding writes (step 3), and the design-system seeding writes (step 4). (Step 7 no longer prompts the founder for a strategy, so it has no AskUserQuestion to re-state.)
 
 **CLAUDE.md scaffold is the template version, not the locked production version.** The founder edits it after onboard — project-specific principles, tool constraints, naming conventions. Constitution rules (including "Only /plan sets `scope:sealed`") live in `docs/constitution.md`, authored by `/constitution`, not in `CLAUDE.md`.
 
