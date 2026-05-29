@@ -95,6 +95,7 @@ git clone --depth 1 --branch "$TEMPLATE_BRANCH" --quiet "$TEMPLATE_REPO" "$tmp/t
 
 # In install mode, copy template into the current directory. Excluded:
 #   .git                          we want fresh history, not the template's
+#   .cascade                      upstream's cascade provenance (run-state + manifests); forks start with no provenance
 #   bootstrap.sh                  no need to ship the bootstrapper into every fork
 #   CLAUDE.md                     upstream's session instructions; fork renders from .template
 #   docs/.solo-config.json        upstream's config; fork renders from .template
@@ -110,6 +111,7 @@ git clone --depth 1 --branch "$TEMPLATE_BRANCH" --quiet "$TEMPLATE_REPO" "$tmp/t
 
 excludes=(
   '--exclude=.git'
+  '--exclude=.cascade'
   '--exclude=bootstrap.sh'
   '--exclude=CLAUDE.md'
   '--exclude=docs/.solo-config.json'
