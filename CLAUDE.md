@@ -38,7 +38,7 @@ Founder-fired commands (thin, deterministic): `/start`, `/status`, `/next`, `/co
 - **Cascade behavior** (`cascade-only` / `interactive` / `yolo`) and every workflow knob live in `docs/.solo-config.json` — see `.claude/commands/config.md`.
 - **`/build` is the one stage that does not auto-fire** — Ralph runs cost real money and produce real commits, so the go signal stays explicit. It also splits into a spawn turn and a `--finalize` turn.
 - **Halt-card rendering** is centralized in `docs/templates/halt-messages.md`. Skills compose against its named patterns; they do not inline halt-card structure.
-- **The constitution at `docs/constitution.md`** governs specs and code. `/review` (check j) and `/verify` check against it. It does not exist for this repo yet — author it via `/constitution` before the first `/specify`.
+- **The constitution at `docs/constitution.md`** governs specs and code. `/review` (check j) and `/verify` check against it. It is authored for this repo at v1.0.0 (2026-05-14); amend it via `/constitution amend <topic>`, never in place.
 
 ## v0.2 cascade primitives
 
@@ -85,5 +85,5 @@ Continuous integration runs via GitHub Actions at `.github/workflows/ci.yml` (pe
 ## Notes
 
 - This file is the session instruction layer. **Governing principles do not go here** — they belong in `docs/constitution.md` via `/constitution`, so `/review` and `/verify` can check work against a stable, versioned document.
-- `docs/constitution.md` has not been authored for this repo yet. It is on the near-term path (the project's six-improvement scope includes the four-hat review process, which the constitution anchors).
+- `docs/constitution.md` is authored for this repo (v1.0.0, 2026-05-14). It anchors the four-hat review process and is checked by `/review` and `/verify`. Amend it via `/constitution amend <topic>` — never edit in place (append-only per `docs/constitution.md` and `.claude/rules/write-discipline.md`).
 - `/onboard` never overwrites an existing `CLAUDE.md` without explicit founder confirmation.
