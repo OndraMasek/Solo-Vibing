@@ -6,6 +6,16 @@
 
 set -uo pipefail
 
+# ---- build-agent identity signal ----
+# Mark every process in this loop (and the `claude` it spawns, plus that
+# claude's PreToolUse hooks) as the autonomous build agent. The cascade-control
+# write denylist (.claude/hooks/pretool-write-denylist.sh) enforces ONLY when
+# this is set, so the agent cannot mutate config / rules / run-state / manifests
+# / locks (incl. via shell redirection), while founder-session orchestration
+# stages — which have no such env var — write those files freely. Per spec
+# AC-21 / D4.1 §D4.1.7. Process-scoped: it vanishes when this script exits.
+export SOLO_BUILD_AGENT=1
+
 # ---- paths (interpolated by /build at generation time) ----
 RALPH_DIR="{{RALPH_DIR}}"
 COMMIT_PREFIX="{{COMMIT_PREFIX}}"

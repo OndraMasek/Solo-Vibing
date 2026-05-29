@@ -76,7 +76,7 @@ If /start returns `BLOCKED` or `NEEDS_CONTEXT` (e.g. child already In Progress, 
 
 - **`.ralph/<MARKER>-N-K/run.sh`** — bash loop, generated from `docs/templates/run.sh.template`. Each iteration:
   1. Increment `iteration.counter`; check caps (iteration / wall / cumulative cost).
-  2. Spawn `claude --dangerously-skip-permissions --output-format stream-json -p "$(cat PROMPT.md)"` to `iterations/NNN/claude.jsonl`.
+  2. Spawn `claude --dangerously-skip-permissions --output-format stream-json -p "$(cat PROMPT.md)"` to `iterations/NNN/claude.jsonl`. `run.sh` exports `SOLO_BUILD_AGENT=1` before this spawn, so the build agent (and the PreToolUse hooks of the `claude` it runs) execute in **build-agent context** — the signal `pretool-write-denylist.sh` keys on to enforce the cascade-control denylist against the autonomous loop (incl. shell-redirection writes) while leaving founder-session orchestration stages unblocked. Per spec AC-21 / D4.1 §D4.1.7.
   3. Extract `total_cost_usd` from the final `result` message; accumulate into `cost.usd`.
   4. Grep assistant message blocks for `<promise>BUILT</promise>`.
   5. Run backpressure commands from `AGENTS.md` in declared order; first failure halts backpressure for this iteration; output to `iterations/NNN/backpressure.log`.

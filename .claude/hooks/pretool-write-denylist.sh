@@ -2,82 +2,71 @@
 # .claude/hooks/pretool-write-denylist.sh
 #
 # Cascade-control write denylist guard per spec AC-21 / D4.1 §D4.1.7.
-# Fires on PreToolUse with matcher Write|Edit|MultiEdit. Reads patterns from
-# .claude/agents/build-write-denylist.txt; halts if the target file path
-# matches any pattern. Halt code: §cascade-control-write-blocked.
 #
-# Per SOL-HANDOFF-008 decision 3: denylist (hard halt) + reviewer-stance
-# soft-check inside /review. This script is the hard-halt layer; the
-# reviewer-stance layer lives inside the /review skill.
+# THREAT MODEL (D4.1 §D4.1.7): an autonomous BUILD AGENT — the Ralph loop — must
+# not mutate cascade-control files (config, rules, run-state, manifests, locks,
+# the denylist itself). The enforcement is therefore SCOPED to that context, not
+# global: the cascade's own orchestrating stages (/onboard, /specify, /plan,
+# /review, /update-linear, /verify, /retro, /config, /build --finalize) run in
+# the founder's interactive session and are the AUTHORITATIVE writers of these
+# files — blocking them is a self-application failure (they cannot complete the
+# cascade). The original global enforcement blocked /onboard from writing
+# docs/.solo-config.json, a file it is the authoritative writer of.
 #
-# Output shape per D2.2 §Hook events table: PreToolUse uses {"decision":
-# "block", "reason": "..."} via stdout for explicit deny (exit 0), or exit 2
-# with stderr diagnostic. We use the explicit-deny JSON shape for clarity.
+# IDENTITY SIGNAL: Ralph runs the build agent in a SEPARATE `claude` process
+# launched by .ralph/<TICKET>/run.sh (see docs/templates/run.sh.template), which
+# exports SOLO_BUILD_AGENT=1. That env var propagates to the spawned `claude`
+# and to the PreToolUse hook subprocesses it launches. Founder sessions have no
+# such var. This guard ENFORCES ONLY when SOLO_BUILD_AGENT=1 and soft-passes
+# otherwise. The signal is process-scoped: it vanishes when run.sh exits, so a
+# crashed loop cannot leave a stale flag that blocks later founder stages (the
+# failure mode a run-state flag would carry).
+#
+# BASH BYPASS CLOSURE: the build agent runs with --dangerously-skip-permissions,
+# so a Write-tool block alone is theater — a `cat > docs/.solo-config.json`
+# heredoc would slip through. In build-agent context this hook therefore also
+# inspects Bash commands for WRITE targets (redirection, tee, cp/mv, dd of=,
+# sed -i, truncate) hitting denylisted paths. Reads (e.g. `cat config`) are not
+# blocked — only writes. This hook must be wired for matcher Write|Edit|MultiEdit|Bash
+# in .claude/settings.json for the Bash arm to receive events.
+#
+# Output: explicit-deny JSON {"decision":"block","reason":"..."} on stdout,
+# exit 0. Halt code: §cascade-control-write-blocked.
+#
+# Per SOL-HANDOFF-008 decision 3: denylist (hard halt, build-agent-scoped) +
+# reviewer-stance soft-check inside /review. Stays denylist-based, not allow-list.
 
 set -euo pipefail
 
-# Source shared helpers (jq fallback, run-state read, etc.). Optional; if the
-# lib is missing, fall through with a soft pass — denylist enforcement is
-# defense-in-depth, not the only safety net.
-LIB="$CLAUDE_PROJECT_DIR/.claude/hooks/lib/common.sh"
-[ -f "$LIB" ] && source "$LIB" || true
+# 1. Identity gate FIRST. Outside build-agent context this is a one-test
+#    soft-pass — the founder session (and every orchestration stage) writes
+#    cascade-control files via the normal tools, unimpeded. Cheap on every
+#    Write/Edit/MultiEdit/Bash call.
+[ "${SOLO_BUILD_AGENT:-}" = "1" ] || exit 0
 
+# 2. From here we are in build-agent context. Resolve inputs; soft-pass if any
+#    are unavailable (defense-in-depth, not the only safety net).
+[ -n "${CLAUDE_PROJECT_DIR:-}" ] || exit 0
 DENYLIST="$CLAUDE_PROJECT_DIR/.claude/agents/build-write-denylist.txt"
+[ -f "$DENYLIST" ] || exit 0
+command -v python3 >/dev/null 2>&1 || exit 0   # python3 is a documented prereq
 
-# If the denylist file is missing, soft-pass (the denylist mechanism is
-# AC-21 — its absence on a fresh fork is not a halt condition).
-if [ ! -f "$DENYLIST" ]; then
-  exit 0
-fi
+EVAL="$CLAUDE_PROJECT_DIR/.claude/hooks/lib/denylist_eval.py"
+[ -f "$EVAL" ] || exit 0
 
-# Read the tool input JSON from stdin.
 PAYLOAD="$(cat)"
 
-# Extract the target file path. PreToolUse payload shape per Claude Code docs:
-#   {"tool_name": "Write|Edit|MultiEdit", "tool_input": {"file_path": "...", ...}}
-# Use jq if available, else python.
-if command -v jq >/dev/null 2>&1; then
-  TARGET="$(printf '%s' "$PAYLOAD" | jq -r '.tool_input.file_path // empty')"
-else
-  TARGET="$(printf '%s' "$PAYLOAD" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("tool_input",{}).get("file_path",""))')"
-fi
+# 3. Evaluate in python3 (robust Bash write-target parsing + fnmatch globbing,
+#    matching the original bash `[[ == ]]` glob semantics). The evaluator prints
+#    the block JSON on a match, nothing on a pass, and always exits 0 — so `|| true`
+#    plus the empty-string check keep `set -e` safe.
+DECISION="$(
+  CLAUDE_PROJECT_DIR="$CLAUDE_PROJECT_DIR" \
+  DENYLIST="$DENYLIST" \
+  HOOK_PAYLOAD_RAW="$PAYLOAD" \
+  python3 "$EVAL"
+)" || true
 
-# Empty target → soft-pass (some tool variants may use a different field).
-[ -z "$TARGET" ] && exit 0
-
-# Normalize: make path relative to repo root for pattern matching.
-REPO_ROOT="$CLAUDE_PROJECT_DIR"
-case "$TARGET" in
-  "$REPO_ROOT"/*) RELPATH="${TARGET#$REPO_ROOT/}" ;;
-  /*)             RELPATH="$TARGET" ;;
-  *)              RELPATH="$TARGET" ;;
-esac
-
-# Walk the denylist; first match wins.
-MATCH=""
-while IFS= read -r LINE || [ -n "$LINE" ]; do
-  # Strip comments and blanks
-  case "$LINE" in
-    \#*|"") continue ;;
-  esac
-  # Glob match using bash's [[ pattern ]]
-  # shellcheck disable=SC2053
-  if [[ "$RELPATH" == $LINE ]]; then
-    MATCH="$LINE"
-    break
-  fi
-done < "$DENYLIST"
-
-if [ -n "$MATCH" ]; then
-  # Emit the explicit-deny JSON shape via stdout, exit 0.
-  REASON="§cascade-control-write-blocked: write to '$RELPATH' matches denylist pattern '$MATCH' in .claude/agents/build-write-denylist.txt (per D4.1.7 / spec AC-21). Recovery: edit the file manually outside the cascade, or use the responsible skill that has authority to write it."
-  if command -v jq >/dev/null 2>&1; then
-    jq -n --arg r "$REASON" '{decision: "block", reason: $r}'
-  else
-    python3 -c "import json,sys; print(json.dumps({'decision':'block','reason':sys.argv[1]}))" "$REASON"
-  fi
-  exit 0
-fi
-
-# No match — silent pass.
+# 4. Emit the block decision if the evaluator produced one; else silent pass.
+[ -n "$DECISION" ] && printf '%s\n' "$DECISION"
 exit 0
