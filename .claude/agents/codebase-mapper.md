@@ -30,7 +30,7 @@ If `docs/onboarding/codebase-map.md` exists, archive it to `docs/onboarding/arch
 1. List the top two directory levels via `ls` / `find -maxdepth 2`.
 2. Identify entry points by checking common file names and `package.json`/`Cargo.toml`/`pyproject.toml` script entries.
 3. Skim README files at the repo root and any `docs/` directory for "how to run / how to test" sections.
-4. Extract build/test/lint commands per the heuristic precedence in `build-SKILL.md`'s AGENTS.md autodetect (package.json → Makefile → pyproject.toml/Cargo.toml → README sniff).
+4. Extract build/test/lint commands per the heuristic precedence in `.claude/skills/build/SKILL.md`'s AGENTS.md autodetect (package.json → Makefile → pyproject.toml/Cargo.toml → README sniff).
 5. Identify key modules by directory size + file count + import-fanin (rough heuristic; not exhaustive).
 
 ## Inputs
