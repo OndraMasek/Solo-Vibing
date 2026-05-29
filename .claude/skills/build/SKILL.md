@@ -200,7 +200,7 @@ else:
 ### Gate 1 — `build.provenance` (pre-flight; manifest chain to `/plan`)
 
 ```text
-read cascade:run-state from docs/.cascade/run-state.json
+read cascade:run-state from .cascade/run-state.json
 
 # Step 1: parent manifest must be /plan (or /update-linear; both seal the plan chain)
 expected_parent_path ← cascade:run-state.last_completed_stage.postcondition_manifest_path

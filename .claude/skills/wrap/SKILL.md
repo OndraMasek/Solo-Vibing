@@ -136,7 +136,7 @@ else:
 V0.1's `/wrap` already evaluates this predicate; v0.2 renames it to `wrap.provenance`.
 
 ```text
-read cascade:run-state from docs/.cascade/run-state.json
+read cascade:run-state from .cascade/run-state.json
 
 # Step 1: parent manifest must be /build's finalize seal
 expected_parent_path ← cascade:run-state.last_completed_stage.postcondition_manifest_path
