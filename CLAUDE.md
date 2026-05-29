@@ -25,6 +25,7 @@ The six always-on conventions are imported below. Claude Code also auto-loads ev
 
 - **Claude.ai project connectors required:** Linear (workspace-scoped) and GitHub (repo read access for this repository). Both must be connected at the Claude.ai project level before /onboard runs. The repo-level declaration lives in `.mcp.json`; /onboard step 2 verifies the connection.
 - **Linear personal API key in `.env`** (set during /onboard step 3, reserved for v0.2 scripts).
+- **Python 3.10+** — required by `tools/solo-verify`, which uses `match` statements; on <3.10 it exits with a clear message instead of a raw `SyntaxError`. CI pins 3.10 in `.github/workflows/ci.yml`. (`bash` 4+, `jq`, and `git` are also assumed on `PATH` for the cascade hooks.)
 
 ## Workflow — the Solo-Setup cascade
 
