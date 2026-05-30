@@ -7,8 +7,18 @@ Tier mapping per D3.2 walking-skeleton catalog:
   * [smoke]      — CLI dispatcher coverage; subprocess-driven end-to-end.
   * [perceptual] — byte-stable `--list-gates` rendering against the canonical
                    seal at docs/specs/0001-v0.2-cascade-integration/perceptual/
-                   solo-verify-list-gates.txt. Fails pre-/build (the artifact
-                   is sealed when /build writes it); passes post-/build.
+                   solo-verify-list-gates.txt. SKIPS pre-/build (the artifact
+                   is sealed when /build writes it); passes post-/build via
+                   byte-equality.
+
+Seed-vs-CI principle (SOL-134): a failing-test seed must never gate CI red on
+a fresh, unbuilt clone or fork. Forks strip `docs/specs/` (bootstrap.sh) but
+keep this suite, so the spec-0001 perceptual artifact is absent in every fork
+and would never be built there (it owns Solo-Setup's internal self-build, not
+the fork's product). The perceptual seed therefore self-SKIPS when its artifact
+is absent rather than `self.fail()`-ing — yellow-skip pre-seal, byte-equality
+assertion post-seal. The unit/smoke tiers (which exercise the fork's own copy
+of `tools/solo-verify`) always run.
 
 Run:
   python3 -m unittest discover tests/solo-verify/ -v
@@ -937,8 +947,10 @@ class PerceptualListGatesArtifact(unittest.TestCase):
     solo-verify-list-gates.txt` — the canonical `--list-gates` rendering
     that gets sealed at /build's at-write trigger.
 
-    PRE-SEAL: this test FAILS (artifact does not yet exist) — that's the
-    walking-skeleton failing-test seed contract.
+    PRE-SEAL: this test SKIPS (artifact does not yet exist) — yellow, not red.
+    A failing-test seed must never gate CI red on a fresh, unbuilt clone/fork
+    (SOL-134); forks strip docs/specs/ and never build spec 0001, so the seed
+    self-skips there permanently instead of failing.
     POST-/build: this test passes via byte-equality.
     """
 
@@ -950,11 +962,13 @@ class PerceptualListGatesArtifact(unittest.TestCase):
     def test_solo_verify_cli_help_output_perceptual(self):
         # tag: perceptual
         if not self.PERCEPTUAL_ARTIFACT.is_file():
-            self.fail(
+            self.skipTest(
                 f"perceptual artifact absent at {self.PERCEPTUAL_ARTIFACT} — "
                 f"walking-skeleton seed expects this to be written at /build's "
-                f"at-write trigger (D3.3 P1). The test passes once the artifact "
-                f"is sealed; this is the standard failing-test-seed contract."
+                f"at-write trigger (D3.3 P1). Pre-seal (and in every fork, which "
+                f"strips docs/specs/ and never builds spec 0001) the seed skips "
+                f"rather than failing, so it never gates CI red (SOL-134). The "
+                f"byte-equality assertion below runs once the artifact is sealed."
             )
         sealed_bytes = self.PERCEPTUAL_ARTIFACT.read_bytes()
         # P2: re-run the capture command — exit zero.
