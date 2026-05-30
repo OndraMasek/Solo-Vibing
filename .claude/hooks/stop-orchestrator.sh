@@ -32,6 +32,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 trace "stop-orchestrator: fired"
 
+# ---- 0. SOL-132 loop-breaker: stop_hook_active guard ----------------------
+#
+# Every Stop/SubagentStop hook must short-circuit when the runtime is already
+# re-invoking it because a prior invocation returned a block decision. Without
+# this guard, any block path below (§kill-received-remote, §manual-halt-pending,
+# finalize-predicate failures, next_chain_step) can be replayed unbounded and
+# hang the session. Reading the payload here also makes the flag available to
+# the checks below.
+
+read_hook_payload
+if [ "$(jq_field '.stop_hook_active')" = "true" ]; then
+  trace "stop-orchestrator: stop_hook_active set; exiting clean to break loop"
+  exit 0
+fi
+
 # ---- 1. Read run-state (required for every subsequent check) --------------
 
 if ! read_run_state; then

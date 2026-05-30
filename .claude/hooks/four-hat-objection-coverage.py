@@ -5,23 +5,38 @@
 Cascade's single agent-type hook per D3.4 §What is a gate. Fires on
 SubagentStop events matched on agent_type starting with "four-hat-".
 
-Validates each four-hat subagent's transcript per the predicate sequence
-in `/review` Gate 2 amendment (Child 0001-B continuation 1):
-  P1: priming text present
-  P2: ## Objections section present in final assistant message
-  P3: ## Seal (or "Seal:") concluding line present
-  P4: every objection bullet parseable per the four-hat template
+Validates each four-hat subagent's transcript per the predicate sequence:
+  P1: priming text present ("You are the <hat> hat" — the real preamble
+      the agents emit per .claude/agents/four-hat-*.md)
+  P2: ## Findings section present in final assistant message
+  P3: every Findings bullet parseable per the four-hat template
 
 Output shape: top-level-fields-only Stop/SubagentStop quirk per D2.2
 §Stop / SubagentStop output schema quirk. NO hookSpecificOutput wrapper.
 
-Halt codes (per D3.4 §`/review` row):
-  §four-hat-incomplete/priming-text-missing
-  §four-hat-incomplete/objections-section-missing
-  §four-hat-incomplete/seal-line-missing
-  §four-hat-incomplete/objection-entry-malformed
+SOL-132 fix — advisory, never-hangs contract:
+  This is a SubagentStop hook. For SubagentStop, a {"decision":"block"} output
+  means "do NOT stop; feed the reason back and continue", which loops the
+  subagent. The prior version hard-`block`ed on every predicate miss AND
+  validated a transcript shape the agents never emit (it expected
+  "Read this spec from …" priming and `## Objections`/`## Seal` sections, but
+  the real agents say "You are the <hat> hat" and emit `## Findings`), so P1
+  failed for every hat and the subagent never terminated (runs hung 2h+/7h).
+  Two changes break the loop universally:
+    1. A `stop_hook_active` guard at the top of main(): if the runtime is
+       already re-invoking us because of a prior block, exit 0 immediately.
+    2. On any non-matching / incomplete state we exit CLEAN (advisory, exit 0)
+       and record the diagnostic via log_halt for triage — we never emit a
+       `block` decision, so a format miss can never hang a session. The hook
+       cannot tell from the SubagentStop payload whether it fired in /specify
+       or /review (no stage field exists), so it stays advisory in all stages.
 
-Exit codes: always 0; halt semantics live in the JSON decision field.
+Diagnostic codes (recorded via log_halt for triage; NOT block decisions):
+  §four-hat-incomplete/priming-text-missing
+  §four-hat-incomplete/findings-section-missing
+  §four-hat-incomplete/finding-entry-malformed
+
+Exit codes: always 0. This hook is advisory only; it never blocks termination.
 """
 
 from __future__ import annotations
@@ -39,46 +54,70 @@ import _lib  # noqa: E402
 
 # ---- Hat → priming-text expectations -------------------------------------
 #
-# Per v0.1's .claude/agents/four-hat-*.md frontmatter, each hat has a priming
-# preamble the parent injects when dispatching. The hook validates that the
-# first user-message-content in the transcript includes the hat's priming
-# marker (a substring unique to that hat).
+# SOL-132 reconciliation: the real agents at .claude/agents/four-hat-*.md open
+# their system prompt with "You are the <Hat> hat in /specify's four-hat
+# review." (capitalized hat noun). They do NOT carry the old
+# "Read this spec from …" priming the prior version of this hook expected — so
+# Predicate 1 used to fail for every hat and hang the session. We now validate
+# against the actual preamble. The marker is the case-insensitive signature
+# substring "You are the <hat> hat" (matched against the transcript's first
+# message), not the full prompt.
 #
-# The PRIMING_MARKERS dict below is the *minimal* substring each hat's
-# transcript must contain in its first user message. v0.1 ships longer priming
-# prompts; this hook validates the *signature* substring, not the full prompt.
-#
-# If v0.1's agent frontmatters are amended, update this dict in lockstep.
-# **Surfaced item:** validate against v0.1 four-hat agent files at apply time.
+# If the agent files are renamed/reworded, update this dict in lockstep.
 
 PRIMING_MARKERS = {
-    "user": "Read this spec from the user's perspective",
-    "engineer": "Read this spec from the implementing engineer's perspective",
-    "pm": "Read this spec from the product manager's perspective",
-    "skeptic": "Read this spec from a skeptical adversarial perspective",
+    "user": "you are the user hat",
+    "engineer": "you are the engineer hat",
+    "pm": "you are the pm hat",
+    "skeptic": "you are the skeptic hat",
 }
 
-# ---- Objection-entry regex ----------------------------------------------
+# ---- Finding-entry regex -------------------------------------------------
 #
-# Per the four-hat template shape: every objection bullet matches
-#   - **<hat>** [<severity>] @ <locus>: <finding>
-# The hat field validates against the dispatching subagent's name.
+# SOL-132 reconciliation: the agents emit a `## Findings` section per
+# rules/auditor-stance.md (one finding per {type, locus}), not a `## Objections`
+# section with the old `- **<hat>** [<severity>] @ <locus>: <finding>` shape.
+# auditor-stance does not pin a single bullet grammar; a finding is a bullet
+# carrying a type, a locus and a severity. We validate the *loose* shape every
+# auditor-stance finding shares — a bullet that names a severity token
+# (low/med/high) somewhere — and treat anything else in the section (prose,
+# sub-headings, the empty-section case) as advisory-pass. This is deliberately
+# permissive: a malformed bullet is recorded for triage, never blocked.
 
-OBJECTION_PATTERN = re.compile(
+FINDING_PATTERN = re.compile(
     r"""
-    ^\s*-\s+                              # bullet prefix
-    \*\*(?P<hat>user|engineer|pm|skeptic)\*\*  # hat token in bold
-    \s+\[(?P<severity>[^\]]+)\]           # severity in brackets
-    \s+@\s+(?P<locus>[^:]+)               # locus after @
-    :\s+(?P<finding>.+)$                  # finding after colon
+    ^\s*[-*]\s+        # bullet prefix
+    .*\b(?:low|med|high)\b   # a severity token somewhere in the bullet
     """,
-    re.VERBOSE,
+    re.VERBOSE | re.IGNORECASE,
 )
+
+
+def _advisory_exit(code: str, diagnostic: str) -> None:
+    """Record a diagnostic for triage and exit CLEAN (exit 0, no decision).
+
+    SOL-132: every non-matching / incomplete state takes this path. We record
+    the diagnostic via log_halt so a founder can triage a real format drift,
+    but we NEVER emit a {"decision":"block"} output — for a SubagentStop hook a
+    block means "do not stop", which loops the subagent forever. Advisory-only.
+    """
+    _lib.log_halt(code, diagnostic)
+    _lib.trace(f"four-hat-objection-coverage: advisory ({code}); exiting clean")
+    sys.exit(0)
 
 
 def main() -> None:
     payload = _lib.read_hook_payload()
     _lib.trace("four-hat-objection-coverage: fired")
+
+    # ---- SOL-132 loop-breaker: stop_hook_active guard ---------------------
+    # If the runtime is re-invoking this Stop/SubagentStop hook because a prior
+    # invocation returned a block decision, stop_hook_active is true. Exit 0
+    # immediately so we can never participate in an unbounded continuation loop.
+    # This is the universal break: it holds regardless of transcript shape.
+    if payload.get("stop_hook_active"):
+        _lib.trace("four-hat-objection-coverage: stop_hook_active set; exiting clean to break loop")
+        sys.exit(0)
 
     # Read SubagentStop payload fields per D2.2 §Hook events table.
     # SubagentStop carries: agent_id, agent_type, agent_transcript_path,
@@ -94,140 +133,101 @@ def main() -> None:
 
     hat = agent_type.removeprefix("four-hat-")
     if hat not in PRIMING_MARKERS:
-        # Unknown hat — surface as halt rather than silently passing.
         diagnostic = (
             f"§four-hat-incomplete/unknown-hat: agent_type={agent_type!r} produced hat={hat!r}; "
             f"expected one of {sorted(PRIMING_MARKERS)}. "
             "Either the agent type was renamed without updating this hook's PRIMING_MARKERS dict, "
-            "or the SubagentStop payload was malformed."
+            "or the SubagentStop payload was malformed. Recorded for triage; not blocking."
         )
-        _lib.log_halt("§four-hat-incomplete/unknown-hat", diagnostic)
-        _lib.emit_stop_block(diagnostic)
-        sys.exit(0)
+        _advisory_exit("§four-hat-incomplete/unknown-hat", diagnostic)
 
     transcript_path = Path(transcript_path_str)
     if not transcript_path.is_file():
         diagnostic = (
             f"§four-hat-incomplete/transcript-absent: agent_id={agent_id} (hat={hat}); "
             f"agent_transcript_path={transcript_path_str!r} does not resolve to a file. "
-            "The subagent terminated without producing a readable transcript; the parent /review "
-            "cannot recompute objections from the agent's self-report."
+            "The subagent terminated without a readable transcript; coverage cannot be recomputed. "
+            "Recorded for triage; not blocking."
         )
-        _lib.log_halt("§four-hat-incomplete/transcript-absent", diagnostic)
-        _lib.emit_stop_block(diagnostic)
-        sys.exit(0)
+        _advisory_exit("§four-hat-incomplete/transcript-absent", diagnostic)
 
     # Parse the transcript JSONL
     transcript_entries = _read_transcript(transcript_path)
     if transcript_entries is None:
         diagnostic = (
             f"§four-hat-incomplete/transcript-malformed: agent_id={agent_id} (hat={hat}); "
-            f"transcript at {transcript_path} is not valid JSONL or contains no readable entries."
+            f"transcript at {transcript_path} is not valid JSONL or contains no readable entries. "
+            "Recorded for triage; not blocking."
         )
-        _lib.log_halt("§four-hat-incomplete/transcript-malformed", diagnostic)
-        _lib.emit_stop_block(diagnostic)
-        sys.exit(0)
+        _advisory_exit("§four-hat-incomplete/transcript-malformed", diagnostic)
 
-    # ---- Predicate 1: priming text present in first user message ----------
-    first_user_msg = _first_user_message_content(transcript_entries)
+    # ---- Predicate 1: priming text present in first message ---------------
+    first_msg = _first_message_content(transcript_entries)
     expected_marker = PRIMING_MARKERS[hat]
-    if first_user_msg is None or expected_marker not in first_user_msg:
+    if first_msg is None or expected_marker not in first_msg.lower():
         diagnostic = (
             f"§four-hat-incomplete/priming-text-missing: hat={hat}; "
             f"transcript={transcript_path}; "
-            f"expected priming marker {expected_marker!r} absent from the first user message. "
-            "The subagent was dispatched with an incomplete or malformed priming prompt; "
-            "the /review skill should re-dispatch this hat with the correct priming."
+            f"expected priming marker {expected_marker!r} absent from the first message. "
+            "The agent's preamble did not match the expected 'You are the <hat> hat' signature; "
+            "either the agent file was reworded or this was not a real four-hat dispatch. "
+            "Recorded for triage; not blocking."
         )
-        _lib.log_halt("§four-hat-incomplete/priming-text-missing", diagnostic)
-        _lib.emit_stop_block(diagnostic)
-        sys.exit(0)
+        _advisory_exit("§four-hat-incomplete/priming-text-missing", diagnostic)
 
-    # ---- Predicate 2: ## Objections section in final assistant message ----
+    # ---- Predicate 2: ## Findings section in final assistant message ------
     last_assistant_msg = _last_assistant_message_content(transcript_entries)
     if last_assistant_msg is None:
         diagnostic = (
             f"§four-hat-incomplete/no-final-assistant-message: hat={hat}; "
             f"transcript={transcript_path}; "
-            "the transcript contains no assistant-role messages, so no objections to verify."
+            "the transcript contains no assistant-role messages. Recorded for triage; not blocking."
         )
-        _lib.log_halt("§four-hat-incomplete/no-final-assistant-message", diagnostic)
-        _lib.emit_stop_block(diagnostic)
-        sys.exit(0)
+        _advisory_exit("§four-hat-incomplete/no-final-assistant-message", diagnostic)
 
-    objections_section = _extract_section(last_assistant_msg, "Objections")
-    if objections_section is None:
+    findings_section = _extract_section(last_assistant_msg, "Findings")
+    if findings_section is None:
         diagnostic = (
-            f"§four-hat-incomplete/objections-section-missing: hat={hat}; "
+            f"§four-hat-incomplete/findings-section-missing: hat={hat}; "
             f"transcript={transcript_path}; "
-            "'## Objections' (or '# Objections') section absent in the final assistant message. "
-            "The four-hat template requires every hat to surface a structured objections section "
-            "even if the objection list is empty (use '- (no objections)' as the single bullet)."
+            "'## Findings' section absent in the final assistant message. "
+            "The four-hat agents emit a `## Findings` section per rules/auditor-stance.md "
+            "(empty section when there are no findings). Recorded for triage; not blocking."
         )
-        _lib.log_halt("§four-hat-incomplete/objections-section-missing", diagnostic)
-        _lib.emit_stop_block(diagnostic)
-        sys.exit(0)
+        _advisory_exit("§four-hat-incomplete/findings-section-missing", diagnostic)
 
-    # ---- Predicate 3: ## Seal heading or "Seal:" line ---------------------
-    seal_section = _extract_section(last_assistant_msg, "Seal")
-    seal_line_match = re.search(r"^\s*Seal:\s*.+$", last_assistant_msg, re.MULTILINE)
-    if seal_section is None and seal_line_match is None:
-        diagnostic = (
-            f"§four-hat-incomplete/seal-line-missing: hat={hat}; "
-            f"transcript={transcript_path}; "
-            "concluding seal absent — expected either a '## Seal' heading or a line beginning 'Seal:'. "
-            "The four-hat template requires every hat to seal its review explicitly so the parent "
-            "/review can distinguish 'hat ran to completion' from 'hat ran out of context'."
-        )
-        _lib.log_halt("§four-hat-incomplete/seal-line-missing", diagnostic)
-        _lib.emit_stop_block(diagnostic)
-        sys.exit(0)
-
-    # ---- Predicate 4: objection entries parseable -------------------------
+    # ---- Predicate 3: finding entries loosely parseable -------------------
+    # An empty Findings section is the zero-findings -> DONE case and is valid.
     malformed_entries = []
-    for line_num, line in enumerate(objections_section.splitlines(), start=1):
-        # Skip blank lines, section sub-headings, the "no objections" sentinel
+    for line_num, line in enumerate(findings_section.splitlines(), start=1):
         stripped = line.strip()
         if not stripped:
             continue
         if stripped.startswith("#"):
             continue
-        if "no objections" in stripped.lower() and stripped.startswith("-"):
-            continue
-        # If the line is a bullet, it must parse
-        if stripped.startswith("-"):
-            match = OBJECTION_PATTERN.match(line)
-            if match is None:
+        # Only bullets are candidate findings; non-bullet prose is allowed.
+        if stripped.startswith(("-", "*")):
+            if FINDING_PATTERN.match(line) is None:
                 malformed_entries.append((line_num, line.rstrip()))
-                continue
-            # Cross-check: the bullet's <hat> field must match this subagent's hat
-            if match.group("hat") != hat:
-                malformed_entries.append(
-                    (line_num, f"{line.rstrip()}  [hat field {match.group('hat')!r} does not match subagent hat {hat!r}]")
-                )
 
     if malformed_entries:
         diagnostic_lines = [
-            f"§four-hat-incomplete/objection-entry-malformed: hat={hat}; "
+            f"§four-hat-incomplete/finding-entry-malformed: hat={hat}; "
             f"transcript={transcript_path}; "
-            f"{len(malformed_entries)} malformed objection entries:",
+            f"{len(malformed_entries)} finding bullets without a recognizable severity token:",
         ]
         for line_num, line in malformed_entries[:10]:  # cap diagnostic at 10
             diagnostic_lines.append(f"  line {line_num}: {line}")
         if len(malformed_entries) > 10:
             diagnostic_lines.append(f"  ...({len(malformed_entries) - 10} more)")
         diagnostic_lines.append(
-            "Expected entry shape: '- **<hat>** [<severity>] @ <locus>: <finding>' "
-            "where <hat> matches the subagent's hat name."
+            "Each finding bullet is expected to carry a severity token (low/med/high) "
+            "per rules/auditor-stance.md. Recorded for triage; not blocking."
         )
         diagnostic = "\n".join(diagnostic_lines)
-        _lib.log_halt("§four-hat-incomplete/objection-entry-malformed", diagnostic)
-        _lib.emit_stop_block(diagnostic)
-        sys.exit(0)
+        _advisory_exit("§four-hat-incomplete/finding-entry-malformed", diagnostic)
 
-    # All four predicates pass for this hat. The aggregate unresolved_count
-    # check fires later in /review's at-write seal, NOT in this per-subagent
-    # hook. Exit clean with no decision.
+    # All predicates pass for this hat. Exit clean with no decision.
     _lib.trace(f"four-hat-objection-coverage: hat={hat} passed all predicates")
     sys.exit(0)
 
@@ -257,15 +257,21 @@ def _read_transcript(path: Path) -> list[dict] | None:
     return entries
 
 
-def _first_user_message_content(entries: list[dict]) -> str | None:
-    """Return the content of the first user-role message in the transcript."""
+def _first_message_content(entries: list[dict]) -> str | None:
+    """Return the content of the first message carrying the agent's priming.
+
+    SOL-132: the four-hat agents' "You are the <hat> hat" preamble is the
+    agent definition's system prompt — depending on the Claude Code version it
+    surfaces as the first system- or user-role transcript entry. We therefore
+    return the first entry of either role that carries readable text, rather
+    than requiring it to be a user-role message.
+    """
     for entry in entries:
         # Transcript entries may vary by Claude Code version. Try common shapes:
-        #   {"role": "user", "content": "..."}
-        #   {"type": "user-message", "content": "..."}
-        #   {"message": {"role": "user", "content": "..."}}
+        #   {"role": "system"|"user", "content": "..."}
+        #   {"message": {"role": ..., "content": "..."}}
         role = entry.get("role") or entry.get("message", {}).get("role")
-        if role == "user":
+        if role in ("system", "user"):
             content = entry.get("content") or entry.get("message", {}).get("content")
             if isinstance(content, str):
                 return content
@@ -276,7 +282,9 @@ def _first_user_message_content(entries: list[dict]) -> str | None:
                     for block in content
                     if isinstance(block, dict) and block.get("type") == "text"
                 ]
-                return "\n".join(p for p in parts if p) or None
+                joined = "\n".join(p for p in parts if p)
+                if joined:
+                    return joined
     return None
 
 
