@@ -17,7 +17,7 @@ Five phases. Validates idea before specs. State lives in Linear (`[<MARKER>-DOC-
 
 ### Phase 1 — Discover (8 fields)
 
-Walk the founder through 8 questions sourced from `docs/product/north-star-questions.md` (in chat: retrieve via Project-knowledge search; in code: read from the working tree). Persist answers to a new `[<MARKER>-DOC-NNNN] discovery: idea-brief-v<N>` Linear document per iteration. Update the `[<MARKER>-DOC-NNNN] discovery: state` document with `{phase, iteration, current_brief_doc_id, status}` at each phase transition.
+Walk the founder through 8 questions sourced from `docs/product/north-star-questions.md` (in chat: retrieve via Project-knowledge search; in code: read from the working tree). Persist answers to a new `[<MARKER>-DOC-NNNN] discovery: idea-brief-v<N>` Linear document per iteration. Update the `[<MARKER>-DOC-NNNN] discovery: state` document with `{phase, iteration, current_brief_doc_id, status, research_depth}` at each phase transition (`research_depth` is `null` until Phase 2's depth gate sets it to `light` or `deep`).
 
 1. **Who is it for?** (primary + secondary segment archetypes)
 2. **What's their problem?**
@@ -38,6 +38,14 @@ Each field is source-tagged in the brief: `(user)`, `(ai-recommended)`, `(resear
 
 ### Phase 2 — Research
 
+**Step 0 — Research-depth gate (ask first, before running any research).** Phase 2 never silently picks a research depth. The first action on entering Phase 2 is to ask the founder which mode to run, present both, and wait for the choice:
+
+<!-- 🤔 The `via: chat-claude-stand-in` tag is named by SOL-131 but not yet defined in any rule (no `chat-claude-stand-in` convention doc exists in the repo). Treating this SKILL.md section as the convention's definition: it tags findings chat-Claude produced inline while standing in for the un-invokable research-investigator agent. If a shared convention doc is wanted, lift this into a rule and reference it. -->
+- **Light** — chat-Claude runs moderate-depth inline web research now (the current behavior). Findings are tagged `via: chat-claude-stand-in` because chat-Claude is standing in for the `research-investigator` agent it cannot Task-invoke. Use when the founder wants a fast read and accepts shallower depth.
+- **Deep** — chat-Claude does **not** run the research itself. It emits each research prompt as a ready-to-run artifact (filled-in prompt text, placeholders substituted from the current idea brief), then **pauses** Phase 2. The founder runs the prompts in parallel sessions or separate deep-research runs and pastes each result back; /discovery then writes the CF2 summaries from the pasted artifacts. Use when the depth is the point (the default expectation per §Deep research runs are time-bounded).
+
+Record the choice in the `discovery: state` doc (`research_depth: light | deep`) **before** running any prompt, so a resuming session — chat or code — knows which mode is in flight and does not re-ask or switch modes mid-Phase. A resume with `research_depth: deep` and unfilled CF2 summaries re-enters the paste-back wait, not the prompt-emit step.
+
 **5 mandatory research prompts** (use `docs/templates/discovery/research-prompt-templates.md` — in chat: retrieve via Project-knowledge search; in code: read from the working tree):
 
 1. Problem validation
@@ -48,13 +56,24 @@ Each field is source-tagged in the brief: `(user)`, `(ai-recommended)`, `(resear
 
 Plus founder-selected tier-2 prompts (regulatory, GTM channels, pricing, etc.).
 
-**Per prompt:**
+Both depth modes cover the same 5 mandatory prompts (plus selected tier-2). They differ only in **who runs the research** and **when the summaries are written** — see the two per-prompt branches below. Either way, each prompt's `## Artifact` block flows into the CF2 Linear summary; the source of that block differs by mode.
+
+**Light mode — per prompt (chat-Claude inline, the current default in `chat` surface):**
 
 1. Create tracking ticket in `Backlog` with label `type:research`, title `[<MARKER>] research: <topic>`.
-2. Allocate `NNNN` per `counter-allocation.md` — single `doc` allocation per prompt, shared between the Linear summary and the deep-report file; passed to the agent.
-3. **Task-invoke `[SOL-AGENT] research-investigator`** with the prompt, slug, and NNNN. The agent runs deep research, writes the deep report to `docs/research/NNNN-<slug>.md` (committed by Claude Code on its next code-side session if research runs in chat), and returns a structured `## Artifact` block with summary findings.
-4. Map agent output to /discovery status per `completion-status.md` §Agent contract. `uncertain:`-prefixed findings (per `auditor-stance.md`) are forwarded to the Linear summary verbatim.
+2. Allocate `NNNN` per `counter-allocation.md` — single `doc` allocation per prompt, shared between the Linear summary and the deep-report file.
+3. **chat-Claude runs moderate-depth inline web research itself** against the filled-in prompt (placeholders substituted per the deep-mode substitution rule below). It does not Task-invoke `research-investigator` — that agent has no chat surface; chat-Claude stands in for it. The findings it produces are tagged `via: chat-claude-stand-in` so downstream readers know the depth is inline, not a deep-research run. In `code` surface, this step is instead a **Task-invoke of `[SOL-AGENT] research-investigator`** with the prompt, slug, and NNNN — the agent runs deep research, writes the deep report to `docs/research/NNNN-<slug>.md`, and returns the `## Artifact` block; no `chat-claude-stand-in` tag applies.
+4. Map the resulting findings to /discovery status per `completion-status.md` §Agent contract. `uncertain:`-prefixed findings (per `auditor-stance.md`) are forwarded to the Linear summary verbatim.
 5. Create Linear research-summary document per CF2 (below).
+
+**Deep mode — per prompt (founder runs the research out-of-band):**
+
+1. **Substitute placeholders.** For each mandatory prompt (and each founder-selected tier-2 prompt), fill the template's `{{SEGMENT}}` / `{{PROBLEM}}` / `{{SOLUTION}}` / `{{RISKS}}` (and `{{WHY_NOW}}` for the timing tier-2) from the current idea brief — segment from field 1, problem from field 2, solution from field 3, risks from field 5, why-now from field 6.
+2. **Emit each filled-in prompt as a ready-to-run artifact**, one `## Artifact` block per prompt (per `research-prompt-templates.md` §Output contract — each prompt is meant to be passed to a research run). chat-Claude does **not** run the research itself in this mode. Each artifact carries the prompt's `<topic>`, its allocated `NNNN`/slug, and the full substituted prompt text the founder can paste straight into a parallel session or a separate deep-research run.
+3. **Pause Phase 2.** Record `research_depth: deep` and the emitted-prompt set in the `discovery: state` doc, then wait. The founder runs the prompts and pastes back each result as a `## Artifact` block.
+4. **On paste-back, write the CF2 summary** for each returned artifact: map its findings to status per `completion-status.md` §Agent contract, forward `uncertain:` findings verbatim, and create the Linear research-summary per CF2 (below) using the prompt's allocated `NNNN`. The deep report at `docs/research/NNNN-<slug>.md` is committed by Claude Code on its next code-side session (per §Deep reports are filesystem artifacts). Findings from a founder-run deep-research session are **not** tagged `via: chat-claude-stand-in` — they came from a real deep run, not an inline stand-in.
+
+Phase 2 seals only once every mandatory prompt has a CF2 summary, regardless of mode. A mandatory prompt left without a summary (deep mode: founder has not pasted it back yet) keeps Phase 2 open per §Completion status.
 
 **Canonical research-summary structure (CF2 — required).** Every Phase 2 Linear research document uses this structure. Doc ID format follows `naming.md` (4-digit DOC prefix; type is encoded in the title, not the ID):
 
@@ -65,10 +84,10 @@ Plus founder-selected tier-2 prompts (regulatory, GTM channels, pricing, etc.).
 <topic, restated>
 
 ## Brief Summary
-2–4 sentences. What was investigated, what was found. Sourced from the agent's deep-report summary.
+2–4 sentences. What was investigated, what was found. Sourced from the `## Artifact` summary (agent deep report in code/deep mode; chat-Claude's inline run in light mode).
 
 ## Key Findings
-- Finding 1 (one line, specific, citable; copied verbatim from agent's `## Artifact` block)
+- Finding 1 (one line, specific, citable; copied verbatim from the `## Artifact` block)
 - Finding 2
 - Finding 3
 - uncertain: hypothesis — what would resolve it
@@ -126,7 +145,7 @@ Per `completion-status.md`. /discovery is multi-phase and resumable — emit per
 - `BLOCKED` — `[<MARKER>-DOC-NNNN] discovery: state` cannot be located or read (Linear MCP error, doc deleted); research-investigator failed on a mandatory prompt (no deep report produced).
 - `NEEDS_CONTEXT` — missing `docs/templates/discovery/research-prompt-templates.md`, `docs/templates/discovery/challenge-checklist.md`, or `docs/product/north-star-questions.md` (in chat this usually means the repo is not synced into the Project's knowledge base — not a dead connector and not a deleted file; re-run /onboard, whose preflight probes the KB sync per §repo-not-synced, or attach the repo via Project knowledge → GitHub → Add); Linear MCP unreachable for `doc`-counter scan per `counter-allocation.md`.
 
-For partial runs (founder ended the chat mid-Phase): emit `DONE` for that chat session with a note that the `discovery: state` Linear doc holds the resume point. Pausing is by design, not failure.
+For partial runs (founder ended the chat mid-Phase): emit `DONE` for that chat session with a note that the `discovery: state` Linear doc holds the resume point. Pausing is by design, not failure. The Phase 2 **deep-mode** paste-back wait is the same shape: after emitting the filled-in prompt artifacts, /discovery has nothing more to do until the founder pastes results back, so it emits `DONE` (or `NEEDS_CONTEXT` if it surfaced the wait as an open request) with `research_depth: deep` recorded in state as the resume anchor.
 
 ## /Chains
 
@@ -160,7 +179,7 @@ This is a lighter prompt than the Group-exit chat-end card; the full card still 
 
 **Linear is canonical for /discovery state, not the filesystem.** Per the project's source-of-truth convention (see `CLAUDE.md` §Where work happens), all /discovery artifacts except deep-report files live in Linear. This matters because /discovery runs in chat-Claude by default (`workflow.discovery_surface: chat`), and chat-Claude reads the repo from Project knowledge (the repo is synced in once via the GitHub Integration and retrieved at runtime via Project-knowledge search — there is no callable GitHub file-read tool in chat) — local filesystem writes would be invisible to it without an intermediate commit + push. Linear documents are read directly via the Linear connector with no commit step.
 
-**Resume contract across surfaces.** Each phase transition updates the `discovery: state` Linear doc with `{phase, iteration, status, last_action, timestamp}`. Any /discovery invocation (chat or code) reads this doc first, then resumes at the indicated phase. If both surfaces invoke /discovery concurrently, the last write wins — single-founder workflow, so true races are rare; defensive locking is v1.1.
+**Resume contract across surfaces.** Each phase transition updates the `discovery: state` Linear doc with `{phase, iteration, status, last_action, timestamp, research_depth}`. Any /discovery invocation (chat or code) reads this doc first, then resumes at the indicated phase. `research_depth` (`null` | `light` | `deep`) tells a resuming session which Phase 2 mode is in flight, so it neither re-asks the depth gate nor switches modes mid-Phase: a `deep`-mode resume with mandatory prompts still missing CF2 summaries re-enters the paste-back wait, not the prompt-emit step. If both surfaces invoke /discovery concurrently, the last write wins — single-founder workflow, so true races are rare; defensive locking is v1.1.
 
 **Five phases, not five turns.** Each phase spans multiple chat exchanges. The state document is what makes /discovery resumable.
 
